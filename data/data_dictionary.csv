@@ -1,0 +1,18 @@
+File,Column,Description,Data Type
+transactions.csv,transaction_id,Unique transaction identifier,TEXT
+transactions.csv,vendor_id,Vendor identifier (links to vendor_list),TEXT
+transactions.csv,transaction_date,Date of transaction (YYYY-MM-DD),DATE
+transactions.csv,amount,Transaction amount in USD,DECIMAL
+transactions.csv,currency,Currency (USD),TEXT
+transactions.csv,transaction_type,"Type (Payment, Invoice, Expense, Refund)",TEXT
+transactions.csv,status,"Status (Pending, Completed, Rejected, Hold)",TEXT
+vendor_payouts.csv,payout_id,Unique payout identifier,TEXT
+vendor_payouts.csv,vendor_id,Vendor identifier,TEXT
+vendor_payouts.csv,amount,Payout amount in USD,DECIMAL
+reconciliation_status.csv,transaction_id,Transaction ID,TEXT
+reconciliation_status.csv,reconciliation_status,"Status (Reconciled, Unreconciled)",TEXT
+chart_of_accounts.csv,account_id,Account ID (unique identifier),INTEGER
+chart_of_accounts.csv,account_type,"Account type (Assets, Liabilities, Revenue, Expense)",TEXT
+vendor_list.csv,vendor_id,Vendor ID,TEXT
+vendor_list.csv,vendor_name,Vendor business name,TEXT
+vendor_list.csv,status,"Status (Active, Inactive, On Hold)",TEXT
