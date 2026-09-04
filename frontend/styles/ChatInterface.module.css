@@ -2,27 +2,27 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: white;
+  background: #ffffff;
 }
 
 .messagesContainer {
   flex: 1;
   overflow-y: auto;
-  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
 }
 
 .welcome {
   text-align: center;
   color: #666;
-  padding: 2rem;
+  padding: 3rem 1.5rem;
+  max-width: 640px;
+  margin: 2rem auto;
 }
 
 .welcome h2 {
   margin-top: 0;
-  color: #333;
+  color: #202123;
   font-size: 1.5rem;
 }
 
@@ -38,16 +38,19 @@
   color: #666;
 }
 
-.message {
-  display: flex;
-  gap: 1rem;
-  animation: slideIn 0.3s ease-out;
+.messageRow {
+  width: 100%;
+  animation: slideIn 0.25s ease-out;
+}
+
+.messageRow.assistant {
+  background: #f7f7f8;
 }
 
 @keyframes slideIn {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -55,54 +58,46 @@
   }
 }
 
-.message.user {
-  justify-content: flex-end;
+.messageInner {
+  max-width: 768px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
 }
 
 .avatar {
   flex-shrink: 0;
-  font-size: 1.5rem;
-}
-
-.message.user .avatar {
-  order: 2;
+  font-size: 1.25rem;
+  width: 1.75rem;
+  text-align: center;
 }
 
 .content {
-  max-width: 70%;
-  padding: 1rem;
-  border-radius: 8px;
-  word-wrap: break-word;
-}
-
-.message.user .content {
-  background: #667eea;
-  color: white;
-  border-bottom-right-radius: 0;
-}
-
-.message.assistant .content {
-  background: #f0f0f0;
-  color: #333;
-  border-bottom-left-radius: 0;
+  flex: 1;
+  min-width: 0;
+  color: #202123;
 }
 
 .content p {
   margin: 0;
   font-size: 0.95rem;
-  line-height: 1.4;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .loading {
   display: flex;
   gap: 0.3rem;
+  padding-top: 0.25rem;
 }
 
 .loading span {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #667eea;
+  background: #8e8ea0;
   animation: bounce 1.4s ease-in-out infinite;
 }
 
@@ -126,49 +121,60 @@
 }
 
 .inputForm {
+  border-top: 1px solid #e5e5e5;
+  background: #ffffff;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.inputBar {
+  max-width: 768px;
+  margin: 0 auto;
   display: flex;
+  align-items: center;
   gap: 0.5rem;
-  padding: 1.5rem;
-  border-top: 1px solid #eee;
-  background: white;
+  background: #fff;
+  border: 1px solid #d9d9e3;
+  border-radius: 999px;
+  padding: 0.4rem 0.4rem 0.4rem 1.1rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
 .input {
   flex: 1;
-  padding: 0.75rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: none;
+  outline: none;
+  padding: 0.5rem 0;
   font-size: 0.95rem;
   font-family: inherit;
-  transition: border-color 0.3s;
-}
-
-.input:focus {
-  outline: none;
-  border-color: #667eea;
+  background: transparent;
 }
 
 .input:disabled {
-  background: #f5f5f5;
+  color: #aaa;
   cursor: not-allowed;
 }
 
 .sendButton {
-  padding: 0.75rem 1.5rem;
-  background: #667eea;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  background: #202123;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 50%;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.3s;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sendButton:hover:not(:disabled) {
-  background: #764ba2;
+  background: #444654;
 }
 
 .sendButton:disabled {
-  background: #ccc;
+  background: #d9d9e3;
   cursor: not-allowed;
 }

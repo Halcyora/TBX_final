@@ -22,6 +22,8 @@ DATABASE SCHEMA:
   reconciliation_status values: Reconciled, Unreconciled, Partially Reconciled, Pending Reconciliation
 - chart_of_accounts: account_id, account_name, account_type, category
   Example row: 1000, Cash, Assets, Assets
+  category/account_type values: Assets, Liabilities, Equity, Revenue, Expenses
+  NOTE: this table has NO balance/amount column - only COUNT/LIST rows by category, do not SUM or reference a balance column
 - vendor_list: vendor_id, vendor_name, industry, country, status
   Example row: V00001, Pro Tech 509, Retail, Canada, Active
   status values: Active, Inactive, On Hold
@@ -118,6 +120,14 @@ LEFT JOIN reconciliation_status r ON t.transaction_id = r.transaction_id
 WHERE LOWER(v.vendor_name) LIKE LOWER('%ABC%')
     AND (r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') OR r.reconciliation_status IS NULL)
 GROUP BY t.vendor_id, v.vendor_name"""
+    },
+    {
+        "question": "How many equity accounts are there in the chart of accounts?",
+        "reasoning": "Need to: 1) Filter chart_of_accounts by category = 'Equity', 2) Count rows (no amounts to sum, this table has no balance column)",
+        "sql": """SELECT 
+    COUNT(*) as equity_account_count
+FROM chart_of_accounts
+WHERE category = 'Equity'"""
     }
 ]
 
@@ -138,15 +148,25 @@ Now write the SQL query based on this reasoning:"""
 # ============================================================================
 # CLASSIFICATION PROMPT (Determine query type and confidence)
 # ============================================================================
-CLASSIFICATION_PROMPT = """{history_context}Analyze this question about financial data:
+CLASSIFICATION_PROMPT = """{history_context}DATABASE SCHEMA (for reference only, do not write SQL here):
+- transactions: transaction_id, vendor_id, transaction_date, transaction_type (Payment/Invoice/Expense/Refund/Credit Memo), amount, currency, account_id, account_name, description, status (Pending/Completed/Rejected/Hold), invoice_number, reference_number, notes
+- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status (Pending/Completed/Cancelled), reference_number
+- reconciliation_status: transaction_id, reconciliation_status (Reconciled/Unreconciled/Partially Reconciled/Pending Reconciliation), matched_payout_id, reconciliation_date, last_reviewed, notes
+- chart_of_accounts: account_id, account_name, account_type/category (Assets/Liabilities/Equity/Revenue/Expenses)
+- vendor_list: vendor_id, vendor_name, industry, country, status (Active/Inactive/On Hold)
+
+Analyze this question about financial data:
 "{question}"
 
 Extract:
-1. intent: What type of query? (vendor_spend, reconciliation_status, payouts, comparisons, other)
-2. entities: Which vendors/accounts/time periods mentioned?
-3. filters: What conditions? (date range, status, vendor, amount, etc.)
+1. intent: What type of query? (vendor_spend, reconciliation_status, payouts, chart_of_accounts, comparisons, other)
+2. entities: Which vendors/accounts/categories/time periods mentioned?
+3. filters: What conditions? (date range, status, vendor, account_type/category, amount, etc.)
 4. confidence: How clear is the question? (high/medium/low)
 5. clarification_needed: What additional info would help? (if any)
+
+If the question can be answered directly from the schema above (e.g. counting/listing accounts by
+category such as "Equity"), it does NOT need a vendor or date range - set confidence high.
 
 If the previous conversation above answers or narrows this question (e.g. "what about last month"
 following an earlier vendor question), use it to resolve entities/filters and raise confidence.

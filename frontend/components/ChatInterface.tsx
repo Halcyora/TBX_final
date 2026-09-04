@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage } from '../lib/types';
+import ResultsPanel from './ResultsPanel';
 import styles from '../styles/ChatInterface.module.css';
 
 interface ChatInterfaceProps {
@@ -20,7 +21,7 @@ export default function ChatInterface({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, loading]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,23 +49,28 @@ export default function ChatInterface({
           messages.map((msg, idx) => (
             <div
               key={idx}
-              className={`${styles.message} ${styles[msg.role]}`}
+              className={`${styles.messageRow} ${styles[msg.role]}`}
             >
-              <div className={styles.avatar}>
-                {msg.role === 'user' ? '👤' : '🤖'}
-              </div>
-              <div className={styles.content}>
-                <p>{msg.content}</p>
+              <div className={styles.messageInner}>
+                <div className={styles.avatar}>
+                  {msg.role === 'user' ? '🧑' : '🤖'}
+                </div>
+                <div className={styles.content}>
+                  <p>{msg.content}</p>
+                  {msg.result && <ResultsPanel result={msg.result} />}
+                </div>
               </div>
             </div>
           ))
         )}
         {loading && (
-          <div className={`${styles.message} ${styles.assistant}`}>
-            <div className={styles.avatar}>🤖</div>
-            <div className={styles.content}>
-              <div className={styles.loading}>
-                <span></span><span></span><span></span>
+          <div className={`${styles.messageRow} ${styles.assistant}`}>
+            <div className={styles.messageInner}>
+              <div className={styles.avatar}>🤖</div>
+              <div className={styles.content}>
+                <div className={styles.loading}>
+                  <span></span><span></span><span></span>
+                </div>
               </div>
             </div>
           </div>
@@ -73,21 +79,23 @@ export default function ChatInterface({
       </div>
 
       <form onSubmit={handleSubmit} className={styles.inputForm}>
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about your finances..."
-          disabled={loading || !sessionId}
-          className={styles.input}
-        />
-        <button
-          type="submit"
-          disabled={loading || !sessionId || !input.trim()}
-          className={styles.sendButton}
-        >
-          {loading ? 'Sending...' : 'Send'}
-        </button>
+        <div className={styles.inputBar}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask about your finances..."
+            disabled={loading || !sessionId}
+            className={styles.input}
+          />
+          <button
+            type="submit"
+            disabled={loading || !sessionId || !input.trim()}
+            className={styles.sendButton}
+          >
+            ➤
+          </button>
+        </div>
       </form>
     </div>
   );

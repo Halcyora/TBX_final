@@ -32,26 +32,18 @@ export default function SessionManager({
 
   return (
     <div className={styles.container}>
-      <div className={styles.info}>
-        <div className={styles.item}>
-          <span className={styles.label}>Session ID:</span>
-          <code className={styles.value}>{sessionId.slice(0, 8)}...</code>
-          <button onClick={copyToClipboard} className={styles.copyBtn}>
-            📋
-          </button>
-        </div>
-        <div className={styles.item}>
-          <span className={styles.label}>Messages:</span>
-          <span className={styles.value}>{messageCount}</span>
-        </div>
-        <div className={styles.item}>
-          <span className={styles.label}>Session Time:</span>
-          <span className={styles.value}>{formatTime(uptime)}</span>
-        </div>
+      <div className={styles.item}>
+        <code className={styles.value}>{sessionId.slice(0, 8)}...</code>
+        <button onClick={copyToClipboard} className={styles.copyBtn} title="Copy session ID">
+          📋
+        </button>
       </div>
-      <p className={styles.note}>
-        ℹ️ Session auto-expires after 60 minutes of inactivity
-      </p>
+      <div className={styles.item}>
+        <span className={styles.label}>{messageCount} msgs</span>
+      </div>
+      <div className={styles.item}>
+        <span className={styles.label}>{formatTime(uptime)}</span>
+      </div>
     </div>
   );
 }

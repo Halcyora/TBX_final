@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FinanceAnswer } from '../lib/types';
 import styles from '../styles/ResultsPanel.module.css';
 
@@ -7,36 +7,90 @@ interface ResultsPanelProps {
 }
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
+  const rows = result.query_results || [];
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: result.session_id, format: 'csv' }),
+      });
+      if (!response.ok) throw new Error('Export failed');
+
+      // Trigger a real browser download (saves to the user's default Downloads folder)
+      // rather than just leaving the CSV sitting server-side.
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition');
+      const match = disposition?.match(/filename="?([^"]+)"?/);
+      const filename = match ? match[1] : 'export.csv';
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export CSV:', error);
+      alert('Failed to export CSV. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <h3>💡 Answer Details</h3>
         <div className={`${styles.confidence} ${styles[result.confidence_band]}`}>
           {result.confidence_band.toUpperCase()} CONFIDENCE
           <span className={styles.score}>
             {(result.confidence_score * 100).toFixed(0)}%
           </span>
         </div>
+        {result.export_available && (
+          <button className={styles.exportButton} onClick={handleExport} disabled={exporting}>
+            {exporting ? 'Exporting...' : '💾 Export as CSV'}
+          </button>
+        )}
       </div>
 
-      {result.message && (
-        <div className={styles.section}>
-          <h4>Answer</h4>
-          <p>{result.message}</p>
+      {rows.length > 0 && (
+        <div className={styles.tableWrapper}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                {columns.map((col) => (
+                  <th key={col}>{col.replace(/_/g, ' ')}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, idx) => (
+                <tr key={idx}>
+                  {columns.map((col) => (
+                    <td key={col}>{formatCellValue(row[col])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
       {result.grounding_info && (
-        <div className={styles.section}>
-          <h4>📊 Grounding Info</h4>
-          <details>
-            <summary>SQL Query</summary>
-            <pre><code>{result.grounding_info.sql_query}</code></pre>
-          </details>
+        <details className={styles.section}>
+          <summary>📊 Grounding Info</summary>
+          <pre><code>{result.grounding_info.sql_query}</code></pre>
           <p className={styles.groundingText}>
-            Data source: Verified execution against database
+            Data source: {result.grounding_info.data_source || 'Verified execution against database'}
           </p>
-        </div>
+        </details>
       )}
 
       {result.anomalies_detected && result.anomalies_detected.length > 0 && (
@@ -51,14 +105,14 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
           </ul>
         </div>
       )}
-
-      {result.export_available && (
-        <div className={styles.section}>
-          <button className={styles.exportButton}>
-            💾 Export as CSV
-          </button>
-        </div>
-      )}
     </div>
   );
+}
+
+function formatCellValue(value: unknown): string {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'number') {
+    return value.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+  return String(value);
 }

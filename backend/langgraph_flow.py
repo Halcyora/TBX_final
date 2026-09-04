@@ -132,7 +132,7 @@ def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Option
 class FinanceAssistantState(BaseModel):
     """State for the LangGraph"""
     user_query: str
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history: List[Dict[str, Any]] = []
     
     # Parsing stage
     intent: Optional[str] = None
@@ -437,9 +437,6 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
             )
             return state
         
-        # Format results table
-        results_table = DataExporter.format_results_table(state.query_results)
-        
         # Build confidence components. Completeness/reliability reflect whether the query
         # executed successfully and was grounded in real data - NOT row count (a correct
         # single-row aggregate, e.g. a SUM, is just as "complete" as a 50-row list).
@@ -465,24 +462,27 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
         confidence_text = _format_confidence(composite_confidence)
         
         if state.query_results:
-            answer_intro = f"**Answer**: Based on the query results, I found {len(state.query_results)} matching records."
+            answer_intro = f"Based on the query results, I found {len(state.query_results)} matching record{'s' if len(state.query_results) != 1 else ''}."
         else:
-            answer_intro = "**Answer**: I found no matching records for this question in the data - the answer is zero/none."
+            answer_intro = "I found no matching records for this question in the data - the answer is zero/none."
         
+        # The full results table is sent separately as structured data (state.query_results)
+        # and rendered by the frontend, so the text answer stays a short narrative summary.
         answer_parts = [
             answer_intro,
-            f"\n**Data Breakdown**:\n{results_table}",
-            f"\n**Confidence Level**: {confidence_text}",
+            f"Confidence: {confidence_text}",
         ]
         
         if state.anomaly_summary:
-            answer_parts.append(f"\n**Note**: {state.anomaly_summary}")
+            answer_parts.append(f"Note: {state.anomaly_summary}")
         
         state.final_answer = "\n".join(answer_parts)
         
         # Store grounding info
         state.grounding_info = {
-            "query_sql": state.sql_query,
+            "sql_query": state.sql_query,
+            "data_source": "Verified execution against database",
+            "execution_time_ms": 0,
             "rows_analyzed": len(state.query_results),
             "date_queried": datetime.now().isoformat(),
             "filters_applied": state.filters,

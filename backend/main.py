@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 FASTAPI_HOST = os.getenv("FASTAPI_HOST", "localhost")
 FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 8000))
 SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_MINUTES", 60))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.60))
 
 # ============================================================================
 # MODELS
@@ -56,8 +57,10 @@ class ChatResponse(BaseModel):
     session_id: str
     message: str
     confidence_score: float
+    confidence_band: str
     grounding_info: Dict[str, Any]
-    anomalies_detected: int
+    anomalies_detected: List[Dict[str, Any]]
+    query_results: List[Dict[str, Any]]
     export_available: bool
     export_filename: Optional[str] = None
 
@@ -147,6 +150,27 @@ class SessionManager:
                 return turn["export_filename"]
         return None
 
+    def list_sessions(self) -> List[Dict]:
+        """List all live (non-expired) sessions, newest activity first, for the sidebar"""
+        now = datetime.now().timestamp()
+        expired = [sid for sid, s in self._sessions.items() if now > s["_expires_at"]]
+        for sid in expired:
+            del self._sessions[sid]
+        
+        summaries = []
+        for session_id, session in self._sessions.items():
+            first_question = session["messages"][0]["question"] if session["messages"] else None
+            summaries.append({
+                "session_id": session_id,
+                "created_at": session["created_at"],
+                "last_message_at": session["last_message_at"],
+                "messages_count": len(session["messages"]),
+                "preview": first_question
+            })
+        
+        summaries.sort(key=lambda s: s["last_message_at"], reverse=True)
+        return summaries
+
 # ============================================================================
 # FASTAPI APP
 # ============================================================================
@@ -164,6 +188,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 session_manager = SessionManager()
@@ -208,6 +233,21 @@ async def create_session():
         logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/sessions", response_model=List[Dict[str, Any]])
+async def list_sessions():
+    """List all active sessions for the sidebar, most recently active first"""
+    try:
+        if not session_manager:
+            raise HTTPException(status_code=500, detail="Session service unavailable")
+        
+        return session_manager.list_sessions()
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/sessions/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str):
     """Get session information"""
@@ -230,6 +270,30 @@ async def get_session(session_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to get session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sessions/{session_id}/messages", response_model=List[Dict[str, Any]])
+async def get_session_messages(session_id: str):
+    """Get this session's Q&A turns flattened into chat messages, to rehydrate the UI"""
+    try:
+        if not session_manager:
+            raise HTTPException(status_code=500, detail="Session service unavailable")
+        
+        session = session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        chat_messages = []
+        for turn in session["messages"]:
+            chat_messages.append({"role": "user", "content": turn["question"]})
+            chat_messages.append({"role": "assistant", "content": turn["answer"]})
+        
+        return chat_messages
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get session messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat", response_model=ChatResponse)
@@ -259,9 +323,9 @@ async def chat(request: ChatRequest):
         context = session_manager.get_context(request.session_id)
         state.conversation_history = context
         
-        # Run through LangGraph
+        # Run through LangGraph (nodes are async, so use ainvoke)
         try:
-            result = await asyncio.to_thread(finance_graph.invoke, state.dict())
+            result = await finance_graph.ainvoke(state.dict())
             
             # Convert result back to state
             if isinstance(result, dict):
@@ -288,13 +352,21 @@ async def chat(request: ChatRequest):
         # Confidence: use the composite value already computed in response_formatting_node
         # (avoids recomputing with a different, drift-prone formula here)
         confidence = response_state.composite_confidence or response_state.confidence_score
+        if confidence >= 0.8:
+            confidence_band = "high"
+        elif confidence >= CONFIDENCE_THRESHOLD:
+            confidence_band = "medium"
+        else:
+            confidence_band = "low"
         
         return ChatResponse(
             session_id=request.session_id,
             message=response_state.final_answer,
             confidence_score=confidence,
+            confidence_band=confidence_band,
             grounding_info=response_state.grounding_info,
-            anomalies_detected=len(response_state.anomalies),
+            anomalies_detected=response_state.anomalies,
+            query_results=response_state.query_results,
             export_available=len(response_state.query_results) > 0,
             export_filename=response_state.export_filename
         )

@@ -1,0 +1,120 @@
+================================================================================
+TBX FINANCE ASSISTANT - BENCHMARK REPORT
+================================================================================
+
+Test Date: 2026-09-05T01:46:36.154603
+Total Questions: 15
+Models Tested: qwen2.5-coder-1.5b, llama3-1-8b, mistral-7b, llama4-scout-17b, qwen3-coder-30b-a3b
+
+================================================================================
+MODEL PERFORMANCE METRICS
+================================================================================
+
+QWEN2.5-CODER-1.5B:
+  Avg Accuracy (math-verified where ground truth exists): 33.55%
+  Avg Execution Correctness (real, executed+verified): 33.55%
+  SQL Execution Rate (ran without error): 66.67%
+  Clarification Rate (multiturn, asked before answering): 0.00%
+  Avg Grounding: 80.00%
+  Hallucination Rate: 20.00%
+  Avg Latency: 12602ms
+  P95 Latency: 41796ms
+
+LLAMA3-1-8B:
+  Avg Accuracy (math-verified where ground truth exists): 0.00%
+  Avg Execution Correctness (real, executed+verified): 0.00%
+  SQL Execution Rate (ran without error): 0.00%
+  Clarification Rate (multiturn, asked before answering): 0.00%
+  Avg Grounding: 0.00%
+  Hallucination Rate: 100.00%
+  Avg Latency: 459ms
+  P95 Latency: 1916ms
+
+MISTRAL-7B:
+  Avg Accuracy (math-verified where ground truth exists): 0.00%
+  Avg Execution Correctness (real, executed+verified): 0.00%
+  SQL Execution Rate (ran without error): 0.00%
+  Clarification Rate (multiturn, asked before answering): 0.00%
+  Avg Grounding: 0.00%
+  Hallucination Rate: 100.00%
+  Avg Latency: 331ms
+  P95 Latency: 361ms
+
+LLAMA4-SCOUT-17B:
+  Avg Accuracy (math-verified where ground truth exists): 0.00%
+  Avg Execution Correctness (real, executed+verified): 0.00%
+  SQL Execution Rate (ran without error): 0.00%
+  Clarification Rate (multiturn, asked before answering): 0.00%
+  Avg Grounding: 0.00%
+  Hallucination Rate: 100.00%
+  Avg Latency: 340ms
+  P95 Latency: 518ms
+
+QWEN3-CODER-30B-A3B:
+  Avg Accuracy (math-verified where ground truth exists): 68.31%
+  Avg Execution Correctness (real, executed+verified): 68.31%
+  SQL Execution Rate (ran without error): 100.00%
+  Clarification Rate (multiturn, asked before answering): 0.00%
+  Avg Grounding: 80.00%
+  Hallucination Rate: 20.00%
+  Avg Latency: 2063ms
+  P95 Latency: 12229ms
+
+================================================================================
+PERFORMANCE BY COMPLEXITY
+================================================================================
+
+EASY:
+  qwen2.5-coder-1.5b: Accuracy=41.64%, Latency=6755ms
+  llama3-1-8b: Accuracy=0.00%, Latency=645ms
+  mistral-7b: Accuracy=0.00%, Latency=327ms
+  llama4-scout-17b: Accuracy=0.00%, Latency=358ms
+  qwen3-coder-30b-a3b: Accuracy=80.00%, Latency=691ms
+
+MODERATE:
+  qwen2.5-coder-1.5b: Accuracy=19.02%, Latency=6536ms
+  llama3-1-8b: Accuracy=0.00%, Latency=318ms
+  mistral-7b: Accuracy=0.00%, Latency=334ms
+  llama4-scout-17b: Accuracy=0.00%, Latency=342ms
+  qwen3-coder-30b-a3b: Accuracy=56.28%, Latency=1302ms
+
+COMPLEX:
+  qwen2.5-coder-1.5b: Accuracy=40.00%, Latency=24515ms
+  llama3-1-8b: Accuracy=0.00%, Latency=413ms
+  mistral-7b: Accuracy=0.00%, Latency=331ms
+  llama4-scout-17b: Accuracy=0.00%, Latency=321ms
+  qwen3-coder-30b-a3b: Accuracy=68.65%, Latency=4196ms
+
+================================================================================
+OVERALL RANKINGS
+================================================================================
+
+Avg Accuracy:
+  1. qwen3-coder-30b-a3b: 0.68
+  2. qwen2.5-coder-1.5b: 0.34
+  3. llama3-1-8b: 0.00
+  4. mistral-7b: 0.00
+  5. llama4-scout-17b: 0.00
+
+Avg Execution Correctness:
+  1. qwen3-coder-30b-a3b: 0.68
+  2. qwen2.5-coder-1.5b: 0.34
+  3. llama3-1-8b: 0.00
+  4. mistral-7b: 0.00
+  5. llama4-scout-17b: 0.00
+
+Avg Latency Ms:
+  1. mistral-7b: 330.78
+  2. llama4-scout-17b: 340.47
+  3. llama3-1-8b: 458.68
+  4. qwen3-coder-30b-a3b: 2062.99
+  5. qwen2.5-coder-1.5b: 12601.71
+
+Avg Grounding:
+  1. qwen2.5-coder-1.5b: 0.80
+  2. qwen3-coder-30b-a3b: 0.80
+  3. llama3-1-8b: 0.00
+  4. mistral-7b: 0.00
+  5. llama4-scout-17b: 0.00
+
+================================================================================
