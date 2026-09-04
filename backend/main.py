@@ -14,7 +14,6 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import redis
 from dotenv import load_dotenv
 import asyncio
 
@@ -38,8 +37,6 @@ logger = logging.getLogger(__name__)
 
 FASTAPI_HOST = os.getenv("FASTAPI_HOST", "localhost")
 FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 8000))
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_MINUTES", 60))
 
 # ============================================================================
@@ -75,46 +72,43 @@ class ExportRequest(BaseModel):
     format: str = "csv"
 
 # ============================================================================
-# REDIS SESSION MANAGER
+# IN-MEMORY SESSION MANAGER (Redis removed for local/dev use; see PRODUCTION.md)
 # ============================================================================
 
 class SessionManager:
-    """Manage sessions using Redis. Conversation is stored as paired Q&A turns
-    (not a flat message log) so context summarization has meaningful content to work with."""
+    """Manage sessions in-process. Conversation is stored as paired Q&A turns
+    (not a flat message log) so context summarization has meaningful content to work with.
+    Sessions are lost on process restart — use the Redis-backed version in production."""
     
-    def __init__(self, redis_client):
-        self.redis = redis_client
-        self.prefix = "session:"
+    def __init__(self):
+        self._sessions: Dict[str, Dict[str, Any]] = {}
         self.timeout = SESSION_TIMEOUT * 60  # Convert to seconds
     
     def create_session(self) -> str:
         """Create new session"""
         session_id = str(uuid.uuid4())
-        session_data = {
-            "created_at": datetime.now().isoformat(),
-            "messages": "[]",
-            "last_message_at": datetime.now().isoformat()
+        now = datetime.now()
+        self._sessions[session_id] = {
+            "created_at": now.isoformat(),
+            "messages": [],
+            "last_message_at": now.isoformat(),
+            "_expires_at": now.timestamp() + self.timeout
         }
-        
-        self.redis.hset(
-            f"{self.prefix}{session_id}",
-            mapping=session_data
-        )
-        self.redis.expire(f"{self.prefix}{session_id}", self.timeout)
         
         logger.info(f"Session created: {session_id}")
         return session_id
     
     def get_session(self, session_id: str) -> Optional[Dict]:
         """Get session data"""
-        data = self.redis.hgetall(f"{self.prefix}{session_id}")
-        
-        if not data:
+        session = self._sessions.get(session_id)
+        if not session:
             return None
         
-        # Parse turns JSON
-        data["messages"] = json.loads(data.get("messages", "[]"))
-        return data
+        if datetime.now().timestamp() > session["_expires_at"]:
+            del self._sessions[session_id]
+            return None
+        
+        return session
     
     def add_turn(self, session_id: str, question: str, answer: str,
                 export_filename: Optional[str] = None):
@@ -130,15 +124,9 @@ class SessionManager:
             "timestamp": datetime.now().isoformat()
         })
         
-        # Update in Redis
-        self.redis.hset(
-            f"{self.prefix}{session_id}",
-            mapping={
-                "messages": json.dumps(session["messages"]),
-                "last_message_at": datetime.now().isoformat()
-            }
-        )
-        self.redis.expire(f"{self.prefix}{session_id}", self.timeout)
+        now = datetime.now()
+        session["last_message_at"] = now.isoformat()
+        session["_expires_at"] = now.timestamp() + self.timeout
     
     def get_context(self, session_id: str, max_turns: int = 3) -> List[Dict]:
         """Get compressed conversation context (last N full turns + summaries of older ones)"""
@@ -178,21 +166,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Redis client
-try:
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=int(os.getenv("REDIS_DB", 0)),
-        decode_responses=True
-    )
-    redis_client.ping()
-    logger.info("Redis connected successfully")
-except Exception as e:
-    logger.error(f"Redis connection failed: {e}")
-    redis_client = None
-
-session_manager = SessionManager(redis_client) if redis_client else None
+session_manager = SessionManager()
 
 # Build LangGraph
 try:
@@ -212,7 +186,7 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "redis_connected": redis_client is not None,
+        "session_backend": "in-memory",
         "database_initialized": True
     }
 
@@ -388,7 +362,7 @@ async def startup_event():
         db = get_db()
         logger.info("Database initialized")
         
-        # Test Redis connection
+        # Sanity-check session manager
         if session_manager:
             test_session = session_manager.create_session()
             logger.info(f"Session manager ready, test session: {test_session}")
@@ -407,9 +381,6 @@ async def shutdown_event():
         db = get_db()
         if db:
             db.close()
-        
-        if redis_client:
-            redis_client.close()
         
         logger.info("Shutdown complete")
     

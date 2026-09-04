@@ -12,7 +12,7 @@ Your job is to convert natural language questions into precise SQL queries.
 DATABASE SCHEMA:
 - transactions: transaction_id, vendor_id, transaction_date, transaction_type, amount, currency, account_id, account_name, description, status, invoice_number, reference_number, notes
   Example row: TXN0000001, V00439, 2024-12-19, Payment, 700.42, USD, 1013, Service Revenue, "Transaction for V00439", Rejected, INV725850, REF52421, (null)
-  transaction_type values: Payment, Invoice, Expense, Refund
+  transaction_type values: Payment, Invoice, Expense, Refund, Credit Memo
   status values: Pending, Completed, Rejected, Hold
 - vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status, reference_number
   Example row: PO0000001, V00342, 2025-07-23, 485.87, USD, Wire Transfer, Cancelled, CHECK545461
@@ -59,7 +59,7 @@ GROUP BY vendor_id, DATE_TRUNC('month', transaction_date)"""
     },
     {
         "question": "Which transactions are still unreconciled?",
-        "reasoning": "Need to: 1) Join transactions with reconciliation_status, 2) Filter where status is 'Unreconciled', 3) Return transaction details",
+        "reasoning": "Need to: 1) Join transactions with reconciliation_status, 2) Filter where status is 'Unreconciled' or 'Pending Reconciliation' (not yet fully reconciled), 3) Return transaction details",
         "sql": """SELECT 
     t.transaction_id,
     t.vendor_id,
@@ -69,7 +69,7 @@ GROUP BY vendor_id, DATE_TRUNC('month', transaction_date)"""
     r.notes
 FROM transactions t
 LEFT JOIN reconciliation_status r ON t.transaction_id = r.transaction_id
-WHERE r.reconciliation_status = 'Unreconciled'
+WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')
 ORDER BY t.transaction_date DESC
 LIMIT 100"""
     },
@@ -116,7 +116,7 @@ FROM transactions t
 JOIN vendor_list v ON t.vendor_id = v.vendor_id
 LEFT JOIN reconciliation_status r ON t.transaction_id = r.transaction_id
 WHERE LOWER(v.vendor_name) LIKE LOWER('%ABC%')
-    AND (r.reconciliation_status = 'Unreconciled' OR r.reconciliation_status IS NULL)
+    AND (r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') OR r.reconciliation_status IS NULL)
 GROUP BY t.vendor_id, v.vendor_name"""
     }
 ]

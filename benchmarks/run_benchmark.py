@@ -68,9 +68,9 @@ SQL_SYSTEM_PROMPT = """You are an expert SQL developer for financial data analys
 Convert natural language questions into precise DuckDB SQL queries.
 
 DATABASE SCHEMA:
-- transactions: transaction_id, vendor_id, transaction_date, transaction_type (Payment, Invoice, Expense, Refund), amount, currency, account_id, account_name, status (Pending, Completed, Rejected, Hold), invoice_number, reference_number, notes
-- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status, reference_number
-- reconciliation_status: transaction_id, reconciliation_status (Reconciled, Unreconciled), matched_payout_id, reconciliation_date, last_reviewed, notes
+- transactions: transaction_id, vendor_id, transaction_date, transaction_type (Payment, Invoice, Expense, Refund, Credit Memo), amount, currency, account_id, account_name, status (Pending, Completed, Rejected, Hold), invoice_number, reference_number, notes
+- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status (Pending, Completed, Cancelled), reference_number
+- reconciliation_status: transaction_id, reconciliation_status (Reconciled, Partially Reconciled, Unreconciled, Pending Reconciliation), matched_payout_id, reconciliation_date, last_reviewed, notes
 - chart_of_accounts: account_id, account_name, account_type (Assets, Liabilities, Revenue, Expense), category
 - vendor_list: vendor_id, vendor_name, industry, country, status (Active, Inactive, On Hold)
 
@@ -85,6 +85,8 @@ RULES:
    add a transaction_type/status filter unless the question explicitly asks to narrow it down.
 7. Always include the relevant *_id column (e.g. vendor_id) in the SELECT list alongside any
    human-readable name, so results can be uniquely identified.
+8. "Unreconciled"/"outstanding" means reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') -
+   not yet fully reconciled. "Reconciled" alone means status = 'Reconciled' only (excludes 'Partially Reconciled').
 
 OUTPUT FORMAT: Return ONLY the SQL query, no markdown fences, no explanation."""
 
@@ -121,7 +123,7 @@ TEST_QUESTIONS = {
             "type": "reconciliation_status",
             "answer_type": "list",
             "id_column": "transaction_id",
-            "reference_sql": "SELECT transaction_id FROM reconciliation_status WHERE reconciliation_status = 'Unreconciled'"
+            "reference_sql": "SELECT transaction_id FROM reconciliation_status WHERE reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')"
         },
         {
             "id": "easy_003",
@@ -181,7 +183,7 @@ TEST_QUESTIONS = {
             "complexity": "moderate",
             "type": "outstanding",
             "answer_type": "scalar",
-            "reference_sql": "SELECT SUM(t.amount) AS total FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status = 'Unreconciled'"
+            "reference_sql": "SELECT SUM(t.amount) AS total FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')"
         },
         {
             "id": "mod_004",
@@ -227,7 +229,7 @@ TEST_QUESTIONS = {
             "id_column": "vendor_id",
             "multiturn": True,
             "clarifying_reply": "Include all transaction types and all dates, no additional filtering.",
-            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status = 'Unreconciled' AND r.matched_payout_id IS NULL GROUP BY t.vendor_id"
+            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') AND r.matched_payout_id IS NULL GROUP BY t.vendor_id"
         },
         {
             "id": "complex_003",
@@ -239,7 +241,7 @@ TEST_QUESTIONS = {
             "id_column": "vendor_id",
             "multiturn": True,
             "clarifying_reply": "Assume today is 2025-12-01 and use exactly 6 calendar months, so 'dormant' means their last transaction was before 2025-06-01.",
-            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status = 'Unreconciled' AND t.vendor_id IN (SELECT vendor_id FROM transactions GROUP BY vendor_id HAVING MAX(transaction_date) < '2025-06-01') GROUP BY t.vendor_id"
+            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') AND t.vendor_id IN (SELECT vendor_id FROM transactions GROUP BY vendor_id HAVING MAX(transaction_date) < '2025-06-01') GROUP BY t.vendor_id"
         },
         {
             "id": "complex_004",
