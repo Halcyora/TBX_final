@@ -1,0 +1,624 @@
+"""
+LangGraph Agentic Loop for Finance Assistant
+State machine for query processing pipeline
+"""
+
+import json
+import os
+import logging
+import urllib.request
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+
+import boto3
+from dotenv import load_dotenv
+
+from langgraph.graph import StateGraph, END
+from pydantic import BaseModel
+
+from database import get_db
+from prompts import (
+    build_few_shot_prompt, build_cot_prompt, build_response_prompt,
+    build_classification_prompt, CLASSIFICATION_PROMPT, SQL_VALIDATION_PROMPT,
+    CLARIFICATION_PROMPT_TEMPLATE
+)
+from sql_validator import SQLValidator
+from tools import QueryExecutor, AnomalyDetector, DataExporter, ContextManager
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# LLM CLIENT
+#
+# PS Section 7 hard constraint: upper limit 20B parameters. No Qwen model on
+# AWS Bedrock is actually <=20B (smallest is 30B total, MoE with ~3B active).
+# Default model is therefore qwen2.5-coder:1.5b running LOCALLY via Ollama
+# (genuinely 1.5B params, satisfies the constraint with large headroom).
+# Bedrock models below are kept only for benchmark comparison
+# (llama3-1-8b / mistral-7b / llama4-scout-17b are compliant <=20B alternatives;
+# qwen3-coder-30b-a3b is kept as a non-compliant reference point, not for production use).
+# ============================================================================
+
+DEFAULT_MODEL_ALIAS = "qwen2.5-coder-1.5b"  # local via Ollama, 1.5B params - PS-compliant
+
+_LOCAL_MODEL_ALIASES = {"qwen2.5-coder-1.5b"}
+
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "qwen2.5-coder:1.5b")
+
+# Bedrock aliases: only compliant (<=20B) models plus one flagged non-compliant reference
+_MODEL_ALIAS_ENV_KEYS = {
+    "llama3-1-8b": "LLAMA_8B_MODEL_ID",
+    "mistral-7b": "MISTRAL_7B_MODEL_ID",
+    "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
+    "qwen3-coder-30b-a3b": "QWEN_CODER_30B_MODEL_ID",  # NOT PS-compliant (30B total) - reference only
+}
+_MODEL_ALIAS_DEFAULTS = {
+    "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
+    "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
+    "llama4-scout-17b": "meta.llama4-scout-17b-instruct-v1:0",
+    "qwen3-coder-30b-a3b": "qwen.qwen3-coder-30b-a3b-v1:0",
+}
+
+_bedrock_client = None
+
+
+def _get_bedrock_client():
+    global _bedrock_client
+    if _bedrock_client is None:
+        _bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        )
+    return _bedrock_client
+
+
+def _resolve_model_id(model_alias: str) -> str:
+    alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "llama3-1-8b"
+    env_key = _MODEL_ALIAS_ENV_KEYS[alias]
+    return os.getenv(env_key, _MODEL_ALIAS_DEFAULTS[alias])
+
+
+def _call_ollama(prompt: str, system: Optional[str] = None,
+                  max_tokens: int = 1024, temperature: float = 0.2) -> str:
+    """Call a local model served by Ollama (genuinely <=20B, runs on-device)"""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = json.dumps({
+        "model": OLLAMA_MODEL_NAME,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": temperature, "num_predict": max_tokens},
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/chat", data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data["message"]["content"]
+
+
+def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,
+             max_tokens: int = 1024, temperature: float = 0.2) -> str:
+    """Call the selected model (local Ollama or AWS Bedrock) and return its text response"""
+    if model_alias in _LOCAL_MODEL_ALIASES:
+        return _call_ollama(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
+
+    model_id = _resolve_model_id(model_alias)
+    client = _get_bedrock_client()
+
+    kwargs: Dict[str, Any] = {
+        "modelId": model_id,
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {"maxTokens": max_tokens, "temperature": temperature},
+    }
+    if system:
+        kwargs["system"] = [{"text": system}]
+
+    response = client.converse(**kwargs)
+    return response["output"]["message"]["content"][0]["text"]
+
+# ============================================================================
+# STATE DEFINITION
+# ============================================================================
+class FinanceAssistantState(BaseModel):
+    """State for the LangGraph"""
+    user_query: str
+    conversation_history: List[Dict[str, str]] = []
+    
+    # Parsing stage
+    intent: Optional[str] = None
+    entities: Dict[str, Any] = {}
+    filters: Dict[str, Any] = {}
+    confidence_score: float = 0.0
+    needs_clarification: bool = False
+    clarification_questions: List[str] = []
+    
+    # SQL generation stage
+    sql_query: Optional[str] = None
+    sql_valid: bool = False
+    sql_errors: List[str] = []
+    
+    # Execution stage
+    query_results: List[Dict[str, Any]] = []
+    execution_error: Optional[str] = None
+    
+    # Anomaly detection stage
+    anomalies: List[Dict[str, Any]] = []
+    anomaly_summary: str = ""
+    
+    # Response stage
+    final_answer: str = ""
+    confidence_components: Dict[str, float] = {}
+    composite_confidence: float = 0.0
+    export_filename: Optional[str] = None
+    grounding_info: Dict[str, Any] = {}
+    
+    # Meta
+    model_used: str = "qwen2.5-coder-1.5b"
+    processing_stages_completed: List[str] = []
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
+# ============================================================================
+# NODE FUNCTIONS
+# ============================================================================
+
+async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Parse user query to extract intent, entities, filters, confidence
+    """
+    logger.info(f"Classifying query: {state.user_query[:100]}")
+    
+    try:
+        history_context = ContextManager.format_history_for_prompt(state.conversation_history)
+        prompt = build_classification_prompt(state.user_query, history_context)
+
+        response_text = call_llm(
+            prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+        )
+        
+        # Try to extract JSON
+        try:
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                classification = json.loads(response_text[json_start:json_end])
+            else:
+                classification = json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse classification JSON, using defaults")
+            classification = {
+                "intent": "unknown",
+                "entities": {},
+                "filters": {},
+                "confidence_score": 0.5,
+                "clarification_questions": []
+            }
+        
+        state.intent = classification.get("intent", "unknown")
+        state.entities = classification.get("entities", {})
+        state.filters = classification.get("filters", {})
+        state.confidence_score = float(classification.get("confidence_score", 0.5))
+        state.clarification_questions = classification.get("clarification_questions", [])
+        
+        # Determine if clarification needed (low confidence)
+        state.needs_clarification = state.confidence_score < 0.6
+        
+        state.processing_stages_completed.append("classification")
+        logger.info(f"Classification complete: intent={state.intent}, confidence={state.confidence_score:.2f}")
+        
+    except Exception as e:
+        logger.error(f"Classification node error: {e}")
+        state.execution_error = str(e)
+    
+    return state
+
+
+async def clarification_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    If confidence is low, generate clarification questions
+    (In real implementation, would ask user via chat interface)
+    """
+    if not state.needs_clarification:
+        return state
+    
+    logger.info("Requesting clarification")
+    
+    questions = state.clarification_questions or [
+        "Could you specify the vendor, date range, or metric you're asking about?"
+    ]
+    clarifications = "\n".join([f"- {q}" for q in questions])
+    
+    # Surface the clarification to the user directly (this path skips response_formatting_node)
+    state.final_answer = CLARIFICATION_PROMPT_TEMPLATE.format(
+        question=state.user_query, clarification_questions=clarifications
+    )
+    state.grounding_info = {
+        "reason": "clarification_requested",
+        "confidence_score": state.confidence_score,
+    }
+    
+    state.processing_stages_completed.append("clarification_requested")
+    return state
+
+
+async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Generate SQL query using few-shot + chain-of-thought
+    """
+    logger.info("Generating SQL query")
+    
+    if state.needs_clarification:
+        logger.info("Skipping SQL generation due to clarification needed")
+        return state
+    
+    try:
+        history_context = ContextManager.format_history_for_prompt(state.conversation_history)
+
+        # First, build CoT prompt
+        cot_prompt = build_cot_prompt(state.user_query, history_context)
+        
+        # Get chain-of-thought reasoning
+        cot_text = call_llm(cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2)
+        logger.debug(f"Chain-of-thought: {cot_text[:200]}")
+        
+        # Now generate SQL with few-shot examples
+        few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
+        
+        sql_text = call_llm(
+            few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+        ).strip()
+        
+        # Clean up SQL (remove markdown formatting if present)
+        if "```sql" in sql_text:
+            sql_text = sql_text.split("```sql")[1].split("```")[0].strip()
+        elif "```" in sql_text:
+            sql_text = sql_text.split("```")[1].split("```")[0].strip()
+        
+        state.sql_query = sql_text
+        state.processing_stages_completed.append("sql_generation")
+        logger.info(f"SQL generated: {sql_text[:100]}...")
+        
+    except Exception as e:
+        logger.error(f"SQL generation error: {e}")
+        state.execution_error = f"SQL generation failed: {str(e)}"
+    
+    return state
+
+
+async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Validate SQL with both static checks and LLM validation
+    """
+    if not state.sql_query or state.execution_error:
+        return state
+    
+    logger.info("Validating SQL")
+    
+    try:
+        # Static validation
+        is_valid, validation_msg = SQLValidator.validate_query(state.sql_query)
+        
+        if not is_valid:
+            state.sql_valid = False
+            state.sql_errors.append(validation_msg)
+            logger.warning(f"Static validation failed: {validation_msg}")
+        else:
+            # LLM-based semantic validation - the LLM may rewrite the query, so it must be
+            # re-checked with the same static safety net before being trusted for execution
+            corrected_sql = call_llm(
+                SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
+                model_alias=state.model_used, max_tokens=1024, temperature=0.0
+            ).strip()
+            
+            if "```sql" in corrected_sql:
+                corrected_sql = corrected_sql.split("```sql")[1].split("```")[0].strip()
+            elif "```" in corrected_sql:
+                corrected_sql = corrected_sql.split("```")[1].split("```")[0].strip()
+            
+            revalidated, revalidation_msg = SQLValidator.validate_query(corrected_sql)
+            if revalidated:
+                state.sql_query = corrected_sql
+                state.sql_valid = True
+                state.processing_stages_completed.append("sql_validation")
+                logger.info("SQL validation passed (LLM-corrected query re-verified)")
+            else:
+                # LLM's "correction" failed the safety net - keep the original query,
+                # which already passed static validation above
+                logger.warning(
+                    f"LLM-corrected SQL failed re-validation ({revalidation_msg}); "
+                    f"keeping original validated query instead"
+                )
+                state.sql_valid = True
+                state.processing_stages_completed.append("sql_validation")
+        
+    except Exception as e:
+        logger.error(f"SQL validation error: {e}")
+        state.sql_errors.append(str(e))
+    
+    return state
+
+
+async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Execute validated SQL query
+    """
+    if not state.sql_valid or not state.sql_query:
+        logger.info("Skipping execution due to validation failure")
+        return state
+    
+    logger.info("Executing query")
+    
+    try:
+        success, result = QueryExecutor.execute(state.sql_query)
+        
+        if success:
+            state.query_results = result if isinstance(result, list) else [result]
+            state.processing_stages_completed.append("query_execution")
+            logger.info(f"Query execution successful, {len(state.query_results)} rows returned")
+        else:
+            state.execution_error = str(result)
+            logger.error(f"Query execution failed: {result}")
+        
+    except Exception as e:
+        logger.error(f"Query execution error: {e}")
+        state.execution_error = str(e)
+    
+    return state
+
+
+async def anomaly_detection_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Detect anomalies in results using hybrid approach
+    """
+    if not state.query_results:
+        return state
+    
+    logger.info("Detecting anomalies")
+    
+    try:
+        detector = AnomalyDetector()
+        anomaly_result = detector.detect_anomalies(state.query_results)
+        
+        state.anomalies = anomaly_result.get("anomalies", [])
+        
+        if state.anomalies:
+            anomaly_count = len(state.anomalies)
+            severity_counts = {
+                "high": len([a for a in state.anomalies if a.get("severity") == "high"]),
+                "medium": len([a for a in state.anomalies if a.get("severity") == "medium"])
+            }
+            
+            state.anomaly_summary = (
+                f"Detected {anomaly_count} anomalies "
+                f"({severity_counts['high']} high, {severity_counts['medium']} medium severity)"
+            )
+            logger.info(state.anomaly_summary)
+        
+        state.processing_stages_completed.append("anomaly_detection")
+        
+    except Exception as e:
+        logger.error(f"Anomaly detection error: {e}")
+    
+    return state
+
+
+async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Format final response with grounding information
+    """
+    # A legitimate zero-row result (state.query_results == []) must still be reported to the
+    # user - only skip if no SQL was ever attempted and no error was raised.
+    if state.sql_query is None and not state.execution_error:
+        return state
+    
+    logger.info("Formatting response")
+    
+    try:
+        if state.execution_error:
+            # Never surface raw exception text to the user - still grounded (no invented
+            # number), just phrased as an honest, actionable message. Raw error stays in logs.
+            logger.error(f"Execution error (not shown to user): {state.execution_error}")
+            state.final_answer = (
+                "I wasn't able to retrieve that data. This question may not map to the "
+                "available financial data (vendor spend, payouts, reconciliation status), "
+                "or something went wrong running the query. Please try rephrasing your question."
+            )
+            return state
+        
+        # Format results table
+        results_table = DataExporter.format_results_table(state.query_results)
+        
+        # Build confidence components. Completeness/reliability reflect whether the query
+        # executed successfully and was grounded in real data - NOT row count (a correct
+        # single-row aggregate, e.g. a SUM, is just as "complete" as a 50-row list).
+        execution_ok = state.sql_valid and not state.execution_error
+        state.confidence_components = {
+            "query_clarity": float(state.confidence_score),
+            "data_completeness": 1.0 if execution_ok else 0.0,
+            "result_reliability": 1.0 if execution_ok else 0.0,
+            "result_count": len(state.query_results),
+            "anomalies_detected": len(state.anomalies)
+        }
+        
+        # Calculate composite confidence: query understanding (40%) + successful,
+        # grounded execution (30%) + result reliability (30%). Row count plays no part.
+        composite_confidence = (
+            state.confidence_components["query_clarity"] * 0.4 +
+            state.confidence_components["data_completeness"] * 0.3 +
+            state.confidence_components["result_reliability"] * 0.3
+        )
+        state.composite_confidence = composite_confidence
+        
+        # Format answer
+        confidence_text = _format_confidence(composite_confidence)
+        
+        if state.query_results:
+            answer_intro = f"**Answer**: Based on the query results, I found {len(state.query_results)} matching records."
+        else:
+            answer_intro = "**Answer**: I found no matching records for this question in the data - the answer is zero/none."
+        
+        answer_parts = [
+            answer_intro,
+            f"\n**Data Breakdown**:\n{results_table}",
+            f"\n**Confidence Level**: {confidence_text}",
+        ]
+        
+        if state.anomaly_summary:
+            answer_parts.append(f"\n**Note**: {state.anomaly_summary}")
+        
+        state.final_answer = "\n".join(answer_parts)
+        
+        # Store grounding info
+        state.grounding_info = {
+            "query_sql": state.sql_query,
+            "rows_analyzed": len(state.query_results),
+            "date_queried": datetime.now().isoformat(),
+            "filters_applied": state.filters,
+            "anomalies_detected": len(state.anomalies)
+        }
+        
+        state.processing_stages_completed.append("response_formatting")
+        logger.info("Response formatted successfully")
+        
+    except Exception as e:
+        logger.error(f"Response formatting error: {e}")
+        state.final_answer = f"Error formatting response: {str(e)}"
+    
+    return state
+
+
+async def export_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Generate CSV export of results (bonus feature)
+    """
+    if not state.query_results:
+        return state
+    
+    logger.info("Generating export")
+    
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"export_{timestamp}.csv"
+        
+        success, result = DataExporter.to_csv(state.query_results, filename)
+        
+        if success:
+            state.export_filename = result
+            state.processing_stages_completed.append("export")
+            logger.info(f"Export successful: {filename}")
+        else:
+            logger.warning(f"Export failed: {result}")
+        
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+    
+    return state
+
+
+# ============================================================================
+# CONDITIONAL ROUTING
+# ============================================================================
+
+def route_clarification(state: FinanceAssistantState) -> str:
+    """Route based on clarification needs"""
+    if state.needs_clarification:
+        return "clarification"
+    return "sql_generation"
+
+
+def route_validation(state: FinanceAssistantState) -> str:
+    """Route based on SQL generation success"""
+    if state.sql_query:
+        return "sql_validation"
+    return "response_formatting"
+
+
+def route_execution(state: FinanceAssistantState) -> str:
+    """Route based on SQL validation"""
+    if state.sql_valid:
+        return "query_execution"
+    return "response_formatting"
+
+
+# ============================================================================
+# BUILD GRAPH
+# ============================================================================
+
+def build_finance_graph():
+    """Build the LangGraph state machine"""
+    graph = StateGraph(FinanceAssistantState)
+    
+    # Add nodes
+    graph.add_node("classify", classify_query_node)
+    graph.add_node("clarification", clarification_node)
+    graph.add_node("sql_generation", sql_generation_node)
+    graph.add_node("sql_validation", sql_validation_node)
+    graph.add_node("query_execution", query_execution_node)
+    graph.add_node("anomaly_detection", anomaly_detection_node)
+    graph.add_node("response_formatting", response_formatting_node)
+    graph.add_node("export", export_node)
+    
+    # Define edges
+    graph.set_entry_point("classify")
+    
+    graph.add_conditional_edges(
+        "classify",
+        route_clarification,
+        {
+            "clarification": "clarification",
+            "sql_generation": "sql_generation"
+        }
+    )
+    
+    graph.add_edge("clarification", END)
+    
+    graph.add_conditional_edges(
+        "sql_generation",
+        route_validation,
+        {
+            "sql_validation": "sql_validation",
+            "response_formatting": "response_formatting"
+        }
+    )
+    
+    graph.add_conditional_edges(
+        "sql_validation",
+        route_execution,
+        {
+            "query_execution": "query_execution",
+            "response_formatting": "response_formatting"
+        }
+    )
+    
+    graph.add_edge("query_execution", "anomaly_detection")
+    graph.add_edge("anomaly_detection", "response_formatting")
+    graph.add_edge("response_formatting", "export")
+    graph.add_edge("export", END)
+    
+    return graph.compile()
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _format_confidence(score: float) -> str:
+    """Format confidence score as text"""
+    if score >= 0.8:
+        return f"🟢 High ({score:.0%})"
+    elif score >= 0.6:
+        return f"🟡 Medium ({score:.0%})"
+    else:
+        return f"🔴 Low ({score:.0%})"
