@@ -1,0 +1,551 @@
+vendor_id,vendor_name,industry,country,status
+V00001,Ltd Services 509,Media,UK,Active
+V00002,Smart Enterprises 1779,Real Estate,Mexico,On Hold
+V00003,Solutions Corp 7012,Technology,USA,Active
+V00004,Digital Smart 8379,Finance,USA,On Hold
+V00005,Digital Ltd 9028,Education,Canada,Inactive
+V00006,Corp Cloud 206,Construction,Canada,Inactive
+V00007,Pro Cloud 2647,Manufacturing,UK,Active
+V00008,Solutions Logistics 1684,Healthcare,UK,On Hold
+V00009,Cloud Tech 7627,Energy,USA,Inactive
+V00010,Solutions Innovations 4903,Hospitality,Mexico,On Hold
+V00011,Supply Corp 3250,Media,USA,Active
+V00012,Smart Data 1407,Hospitality,Canada,Active
+V00013,Logistics Cloud 7528,Real Estate,UK,Active
+V00014,Supply Supply 3532,Real Estate,UK,Active
+V00015,Inc Ltd 2903,Energy,Mexico,Active
+V00016,Systems Center 6316,Retail,Mexico,On Hold
+V00017,Smart Pro 1016,Manufacturing,USA,Active
+V00018,Logistics Cloud 1184,Manufacturing,India,Active
+V00019,Digital Ltd 8279,Education,Mexico,Inactive
+V00020,Enterprises Cloud 2387,Manufacturing,Mexico,On Hold
+V00021,Innovations Cloud 9677,Education,India,Inactive
+V00022,Supply Smart 2366,Energy,Germany,Active
+V00023,Tech Services 2604,Real Estate,Canada,Inactive
+V00024,Inc Solutions 6404,Education,India,Inactive
+V00025,Partners Cloud 9164,Hospitality,USA,Active
+V00026,Innovations Cloud 5673,Logistics,UK,Inactive
+V00027,Systems Center 153,Media,Mexico,Active
+V00028,Partners Systems 8417,Food & Beverage,USA,Active
+V00029,Ltd Partners 3358,Consulting,UK,Active
+V00030,Innovations Partners 109,Finance,UK,Inactive
+V00031,Global Services 6047,Food & Beverage,UK,Active
+V00032,Tech Smart 9395,Logistics,USA,Inactive
+V00033,Solutions Innovations 2160,Consulting,Mexico,Inactive
+V00034,Innovations Systems 4442,Energy,India,Inactive
+V00035,Digital Innovations 3395,Media,UK,Inactive
+V00036,Ltd Supply 7277,Food & Beverage,India,Inactive
+V00037,Services Smart 3781,Logistics,UK,Active
+V00038,Corp Innovations 3870,Finance,Canada,Active
+V00039,Solutions Ltd 1064,Manufacturing,USA,Active
+V00040,Pro Solutions 8523,Manufacturing,UK,Inactive
+V00041,Digital Innovations 2267,Media,India,On Hold
+V00042,Group Smart 7849,Construction,Germany,Active
+V00043,Services Services 7162,Healthcare,Germany,Inactive
+V00044,Center Tech 1712,Technology,Germany,Active
+V00045,Services Smart 3239,Manufacturing,India,Inactive
+V00046,Enterprises Hub 3106,Retail,Germany,Active
+V00047,Solutions Center 9116,Logistics,USA,On Hold
+V00048,Global Solutions 3972,Consulting,Germany,Inactive
+V00049,Group Digital 6670,Food & Beverage,USA,Active
+V00050,Logistics Global 6496,Retail,Germany,Active
+V00051,Hub Innovations 8073,Consulting,Canada,Active
+V00052,Digital Tech 9589,Media,India,Active
+V00053,Pro Tech 921,Finance,Germany,On Hold
+V00054,Partners Systems 1031,Energy,USA,Active
+V00055,Solutions Inc 1213,Real Estate,Canada,Inactive
+V00056,Services Corp 4133,Finance,India,Active
+V00057,Inc Solutions 6968,Real Estate,India,On Hold
+V00058,Partners Pro 4372,Manufacturing,Mexico,Active
+V00059,Smart Cloud 6584,Consulting,Mexico,Active
+V00060,Center Pro 1288,Technology,Germany,On Hold
+V00061,Corp Services 1300,Energy,Canada,On Hold
+V00062,Cloud Enterprises 5818,Food & Beverage,USA,Active
+V00063,Supply Data 2684,Telecommunications,India,Active
+V00064,Inc Ltd 8766,Technology,Mexico,On Hold
+V00065,Data Services 2300,Retail,USA,Active
+V00066,Innovations Enterprises 4562,Retail,India,Active
+V00067,Pro Digital 4425,Energy,Germany,Active
+V00068,Tech Solutions 7039,Hospitality,UK,Active
+V00069,Global Pro 2243,Real Estate,UK,Active
+V00070,Center Innovations 7107,Energy,USA,Active
+V00071,Solutions Enterprises 9038,Technology,UK,On Hold
+V00072,Innovations Enterprises 7141,Consulting,USA,Active
+V00073,Supply Tech 5962,Manufacturing,Mexico,Active
+V00074,Services Supply 9273,Food & Beverage,Germany,On Hold
+V00075,Enterprises Smart 2762,Construction,Canada,Inactive
+V00076,Global Systems 5542,Construction,Germany,Active
+V00077,Cloud Systems 1871,Education,USA,Inactive
+V00078,Smart Digital 7641,Healthcare,UK,Active
+V00079,Smart Global 3264,Education,UK,Active
+V00080,Solutions Cloud 5853,Real Estate,India,Inactive
+V00081,Innovations Pro 552,Logistics,UK,Active
+V00082,Corp Cloud 726,Logistics,India,Inactive
+V00083,Supply Pro 7249,Finance,India,Active
+V00084,Logistics Corp 3214,Retail,USA,Inactive
+V00085,Global Partners 8921,Real Estate,Mexico,Active
+V00086,Supply Hub 1246,Real Estate,UK,On Hold
+V00087,Pro Services 5020,Energy,UK,Inactive
+V00088,Pro Logistics 4944,Energy,Canada,Active
+V00089,Hub Logistics 2951,Finance,India,Active
+V00090,Logistics Innovations 106,Retail,UK,Active
+V00091,Hub Corp 5379,Telecommunications,Germany,Inactive
+V00092,Digital Partners 7852,Construction,Mexico,Active
+V00093,Solutions Data 8545,Real Estate,Mexico,On Hold
+V00094,Pro Solutions 3948,Real Estate,UK,Active
+V00095,Digital Enterprises 500,Technology,Canada,Inactive
+V00096,Inc Solutions 7561,Education,Mexico,On Hold
+V00097,Digital Logistics 8199,Education,Canada,Active
+V00098,Ltd Global 1846,Construction,Germany,Active
+V00099,Systems Partners 7711,Technology,India,Active
+V00100,Services Center 2284,Construction,Germany,On Hold
+V00101,Innovations Inc 5298,Construction,Germany,On Hold
+V00102,Partners Hub 9076,Telecommunications,Canada,Inactive
+V00103,Center Cloud 4150,Hospitality,Mexico,Active
+V00104,Partners Group 4019,Retail,Germany,Active
+V00105,Data Smart 4551,Healthcare,UK,On Hold
+V00106,Solutions Enterprises 2571,Manufacturing,Germany,Active
+V00107,Digital Solutions 6897,Education,UK,On Hold
+V00108,Center Hub 1120,Manufacturing,Germany,Inactive
+V00109,Corp Global 9532,Education,Germany,Active
+V00110,Supply Data 6489,Hospitality,Germany,On Hold
+V00111,Innovations Inc 3713,Telecommunications,Canada,Active
+V00112,Hub Group 575,Education,UK,Inactive
+V00113,Systems Center 2191,Finance,India,Active
+V00114,Logistics Corp 9346,Real Estate,USA,Active
+V00115,Ltd Hub 2323,Hospitality,Germany,Active
+V00116,Tech Cloud 6311,Healthcare,Canada,Inactive
+V00117,Pro Pro 6311,Retail,Germany,Active
+V00118,Solutions Group 417,Media,India,Active
+V00119,Supply Smart 1224,Construction,Mexico,Active
+V00120,Global Smart 3366,Hospitality,USA,On Hold
+V00121,Enterprises Smart 2168,Telecommunications,Mexico,Active
+V00122,Corp Digital 7719,Media,UK,Active
+V00123,Systems Inc 1976,Construction,Canada,Active
+V00124,Services Corp 520,Food & Beverage,UK,On Hold
+V00125,Logistics Logistics 3349,Logistics,India,Active
+V00126,Services Data 9937,Construction,USA,On Hold
+V00127,Tech Supply 8828,Education,Mexico,Active
+V00128,Solutions Partners 5690,Technology,Germany,Inactive
+V00129,Services Hub 6034,Real Estate,Germany,Active
+V00130,Hub Systems 8648,Real Estate,UK,On Hold
+V00131,Innovations Group 7716,Education,Mexico,On Hold
+V00132,Cloud Pro 4122,Hospitality,USA,Active
+V00133,Center Smart 7713,Finance,India,Inactive
+V00134,Pro Global 8198,Hospitality,UK,Active
+V00135,Group Digital 5913,Construction,UK,Active
+V00136,Cloud Inc 4626,Energy,USA,On Hold
+V00137,Digital Solutions 4054,Media,Germany,Inactive
+V00138,Innovations Smart 7900,Real Estate,Mexico,Inactive
+V00139,Center Global 1624,Retail,Canada,Inactive
+V00140,Smart Data 9628,Healthcare,Germany,On Hold
+V00141,Partners Supply 7071,Media,India,Active
+V00142,Supply Center 4538,Retail,UK,Active
+V00143,Services Digital 5269,Logistics,Mexico,On Hold
+V00144,Systems Digital 3645,Media,Germany,Active
+V00145,Corp Partners 9877,Retail,USA,Active
+V00146,Data Smart 6012,Consulting,UK,Active
+V00147,Innovations Enterprises 4594,Technology,USA,On Hold
+V00148,Data Enterprises 8142,Logistics,USA,On Hold
+V00149,Data Group 7943,Telecommunications,UK,Active
+V00150,Tech Cloud 7927,Logistics,USA,Inactive
+V00151,Group Solutions 9553,Real Estate,Mexico,Active
+V00152,Enterprises Enterprises 9321,Retail,USA,Active
+V00153,Services Innovations 6918,Finance,India,On Hold
+V00154,Smart Partners 6332,Telecommunications,Germany,Active
+V00155,Corp Hub 5103,Finance,India,Active
+V00156,Inc Services 3504,Real Estate,Canada,Active
+V00157,Solutions Systems 4029,Consulting,India,Active
+V00158,Systems Global 6793,Telecommunications,Mexico,On Hold
+V00159,Group Data 634,Manufacturing,UK,Active
+V00160,Center Solutions 3924,Food & Beverage,UK,On Hold
+V00161,Digital Hub 1980,Energy,Canada,Active
+V00162,Cloud Enterprises 1269,Technology,Canada,Active
+V00163,Inc Corp 4828,Telecommunications,USA,Inactive
+V00164,Data Logistics 4560,Energy,India,Inactive
+V00165,Center Solutions 9898,Technology,Germany,Active
+V00166,Inc Cloud 523,Logistics,Canada,On Hold
+V00167,Corp Global 4515,Finance,USA,Active
+V00168,Group Partners 7345,Food & Beverage,UK,Active
+V00169,Corp Hub 8156,Logistics,Germany,Active
+V00170,Hub Pro 5360,Real Estate,USA,Active
+V00171,Pro Hub 8217,Retail,Mexico,Inactive
+V00172,Innovations Tech 7551,Logistics,UK,Active
+V00173,Pro Services 6722,Hospitality,India,Active
+V00174,Innovations Center 6870,Technology,Canada,On Hold
+V00175,Supply Inc 8267,Real Estate,Germany,Active
+V00176,Digital Cloud 9098,Consulting,UK,Inactive
+V00177,Group Services 572,Real Estate,India,Active
+V00178,Systems Data 9124,Technology,India,Inactive
+V00179,Solutions Smart 1958,Telecommunications,USA,Active
+V00180,Group Data 8437,Media,UK,Inactive
+V00181,Group Group 4093,Telecommunications,India,Active
+V00182,Logistics Digital 9920,Energy,Mexico,Active
+V00183,Solutions Cloud 6898,Healthcare,India,Active
+V00184,Global Data 4991,Hospitality,India,On Hold
+V00185,Group Enterprises 7416,Energy,Germany,Active
+V00186,Pro Innovations 9003,Education,Germany,Active
+V00187,Digital Smart 9468,Education,Canada,Inactive
+V00188,Tech Pro 7849,Media,Germany,Inactive
+V00189,Ltd Enterprises 8215,Technology,Canada,On Hold
+V00190,Corp Pro 1744,Hospitality,Germany,Active
+V00191,Partners Center 351,Media,Canada,Inactive
+V00192,Ltd Enterprises 1325,Telecommunications,UK,Active
+V00193,Inc Logistics 1415,Hospitality,UK,On Hold
+V00194,Logistics Pro 8094,Hospitality,India,Active
+V00195,Inc Solutions 3946,Real Estate,Mexico,Active
+V00196,Smart Solutions 7210,Logistics,Mexico,Active
+V00197,Center Systems 5006,Food & Beverage,USA,Active
+V00198,Pro Tech 4906,Healthcare,UK,Inactive
+V00199,Enterprises Smart 8802,Education,India,Active
+V00200,Systems Systems 1393,Finance,Germany,On Hold
+V00201,Smart Group 9654,Consulting,Canada,Inactive
+V00202,Ltd Cloud 7629,Retail,Mexico,Active
+V00203,Center Data 9055,Consulting,USA,Inactive
+V00204,Supply Corp 5001,Real Estate,Germany,Active
+V00205,Center Data 3363,Education,Germany,Active
+V00206,Smart Logistics 9470,Healthcare,India,Active
+V00207,Data Global 6584,Retail,USA,On Hold
+V00208,Tech Inc 8238,Hospitality,UK,Active
+V00209,Inc Supply 3688,Real Estate,Canada,On Hold
+V00210,Cloud Enterprises 1691,Food & Beverage,Mexico,Active
+V00211,Data Center 646,Finance,UK,Active
+V00212,Solutions Data 5452,Media,Germany,Active
+V00213,Digital Enterprises 8937,Food & Beverage,UK,On Hold
+V00214,Partners Cloud 2795,Retail,Germany,Active
+V00215,Pro Services 7773,Logistics,Canada,Active
+V00216,Logistics Innovations 6092,Logistics,Germany,Active
+V00217,Cloud Innovations 2124,Telecommunications,UK,Active
+V00218,Corp Logistics 6186,Logistics,Mexico,Active
+V00219,Group Global 9298,Healthcare,India,Active
+V00220,Ltd Solutions 7706,Food & Beverage,Mexico,Active
+V00221,Ltd Hub 2011,Consulting,USA,Active
+V00222,Data Group 2002,Logistics,Canada,On Hold
+V00223,Enterprises Logistics 7532,Healthcare,Mexico,On Hold
+V00224,Hub Corp 2631,Food & Beverage,Germany,Active
+V00225,Group Inc 6786,Retail,USA,Active
+V00226,Digital Center 7385,Manufacturing,UK,Active
+V00227,Supply Innovations 5976,Technology,Germany,Active
+V00228,Digital Services 7550,Logistics,Mexico,Active
+V00229,Ltd Ltd 9883,Technology,USA,Active
+V00230,Smart Enterprises 9350,Manufacturing,USA,On Hold
+V00231,Digital Corp 3638,Hospitality,Canada,Active
+V00232,Enterprises Inc 146,Retail,Canada,Active
+V00233,Innovations Cloud 2958,Logistics,Mexico,Active
+V00234,Enterprises Global 5969,Construction,Canada,On Hold
+V00235,Pro Global 2954,Retail,USA,Active
+V00236,Hub Partners 1962,Media,USA,Inactive
+V00237,Center Supply 8508,Finance,USA,Inactive
+V00238,Partners Smart 810,Media,Mexico,On Hold
+V00239,Data Center 610,Technology,Germany,Inactive
+V00240,Hub Services 8132,Media,Germany,Active
+V00241,Solutions Pro 2530,Logistics,Canada,Active
+V00242,Inc Ltd 9690,Energy,Mexico,Active
+V00243,Logistics Inc 8792,Retail,Germany,On Hold
+V00244,Inc Hub 1724,Construction,Mexico,Active
+V00245,Ltd Ltd 9133,Media,Canada,Inactive
+V00246,Center Smart 6879,Healthcare,Germany,Inactive
+V00247,Hub Services 5220,Education,UK,Active
+V00248,Supply Enterprises 7870,Logistics,USA,Active
+V00249,Solutions Hub 1682,Media,Mexico,Active
+V00250,Enterprises Innovations 1082,Finance,India,On Hold
+V00251,Pro Services 6830,Healthcare,Mexico,Inactive
+V00252,Tech Data 9937,Retail,UK,Active
+V00253,Corp Partners 3585,Consulting,Mexico,Inactive
+V00254,Smart Services 5836,Hospitality,India,Active
+V00255,Services Cloud 9506,Manufacturing,Germany,On Hold
+V00256,Inc Inc 9221,Technology,India,Active
+V00257,Global Systems 4577,Media,UK,Active
+V00258,Supply Global 3072,Hospitality,Canada,On Hold
+V00259,Logistics Solutions 2424,Media,Mexico,Active
+V00260,Solutions Partners 3624,Education,Germany,Inactive
+V00261,Pro Systems 6162,Retail,Mexico,Active
+V00262,Corp Inc 1491,Food & Beverage,USA,Active
+V00263,Systems Inc 915,Real Estate,USA,Active
+V00264,Center Hub 8057,Finance,Germany,Inactive
+V00265,Cloud Digital 8494,Logistics,UK,Inactive
+V00266,Services Data 9817,Telecommunications,India,Active
+V00267,Tech Smart 6575,Finance,USA,Active
+V00268,Digital Data 3560,Construction,Canada,Active
+V00269,Data Pro 2065,Technology,Germany,Inactive
+V00270,Systems Enterprises 6329,Energy,Mexico,Active
+V00271,Partners Innovations 5902,Logistics,Germany,Active
+V00272,Hub Global 7632,Food & Beverage,USA,Active
+V00273,Corp Hub 9494,Education,Mexico,Inactive
+V00274,Data Services 6736,Technology,UK,Active
+V00275,Inc Center 6028,Logistics,Germany,Active
+V00276,Smart Hub 9748,Education,India,Active
+V00277,Logistics Data 5662,Manufacturing,UK,Active
+V00278,Solutions Partners 1968,Energy,India,Active
+V00279,Supply Supply 2519,Manufacturing,USA,Active
+V00280,Cloud Digital 2942,Finance,Canada,Active
+V00281,Systems Ltd 8195,Telecommunications,India,On Hold
+V00282,Center Corp 5395,Hospitality,Mexico,Active
+V00283,Enterprises Center 1218,Telecommunications,Germany,Active
+V00284,Cloud Corp 1020,Healthcare,India,Active
+V00285,Data Center 7504,Technology,USA,Active
+V00286,Data Solutions 1579,Finance,India,On Hold
+V00287,Logistics Center 9608,Energy,Mexico,Active
+V00288,Center Corp 3184,Healthcare,India,Inactive
+V00289,Partners Enterprises 1113,Telecommunications,USA,Active
+V00290,Solutions Partners 2927,Technology,Canada,Inactive
+V00291,Center Partners 8664,Finance,Canada,Active
+V00292,Supply Data 6447,Education,UK,On Hold
+V00293,Tech Ltd 5582,Logistics,UK,Active
+V00294,Innovations Logistics 4755,Retail,Mexico,On Hold
+V00295,Enterprises Pro 1435,Finance,Mexico,Active
+V00296,Supply Data 6521,Consulting,India,Active
+V00297,Data Innovations 6271,Real Estate,UK,Active
+V00298,Partners Solutions 7037,Energy,UK,Active
+V00299,Supply Data 3053,Manufacturing,UK,Inactive
+V00300,Digital Smart 2353,Consulting,USA,Active
+V00301,Services Partners 8943,Hospitality,Mexico,On Hold
+V00302,Tech Pro 2247,Finance,Germany,Active
+V00303,Systems Systems 2812,Media,Germany,Active
+V00304,Hub Supply 3991,Telecommunications,India,Active
+V00305,Center Smart 8849,Manufacturing,UK,Inactive
+V00306,Digital Supply 9445,Telecommunications,Germany,Active
+V00307,Logistics Partners 8741,Education,Canada,Active
+V00308,Inc Enterprises 4196,Technology,Mexico,Inactive
+V00309,Supply Innovations 1780,Media,India,Active
+V00310,Data Solutions 2726,Retail,Germany,On Hold
+V00311,Enterprises Hub 1602,Food & Beverage,Canada,Inactive
+V00312,Supply Global 6897,Technology,Germany,On Hold
+V00313,Supply Smart 6426,Logistics,UK,Active
+V00314,Global Pro 1723,Hospitality,Mexico,Active
+V00315,Enterprises Enterprises 727,Retail,Germany,Active
+V00316,Group Center 186,Food & Beverage,USA,Active
+V00317,Cloud Digital 2549,Energy,Mexico,On Hold
+V00318,Partners Hub 1921,Construction,UK,Active
+V00319,Data Services 882,Manufacturing,Germany,On Hold
+V00320,Center Solutions 1916,Hospitality,Germany,On Hold
+V00321,Innovations Global 8543,Finance,Canada,Active
+V00322,Data Hub 125,Finance,UK,Active
+V00323,Corp Hub 3168,Real Estate,Mexico,Active
+V00324,Partners Supply 1208,Energy,India,On Hold
+V00325,Partners Innovations 433,Education,Germany,Active
+V00326,Ltd Logistics 6216,Retail,Mexico,Active
+V00327,Supply Solutions 5749,Manufacturing,Mexico,Active
+V00328,Corp Pro 2285,Technology,UK,On Hold
+V00329,Pro Ltd 2968,Hospitality,Mexico,Inactive
+V00330,Group Ltd 3086,Construction,Canada,Active
+V00331,Center Tech 4907,Manufacturing,USA,Active
+V00332,Tech Pro 5180,Energy,Germany,On Hold
+V00333,Group Cloud 699,Construction,Mexico,Active
+V00334,Data Supply 883,Hospitality,Mexico,Active
+V00335,Cloud Services 6129,Education,Germany,Inactive
+V00336,Logistics Pro 3160,Telecommunications,Mexico,Inactive
+V00337,Supply Partners 4469,Construction,USA,Inactive
+V00338,Solutions Hub 9970,Hospitality,Canada,On Hold
+V00339,Data Pro 1780,Logistics,UK,Active
+V00340,Data Center 9973,Media,Germany,Active
+V00341,Center Supply 7425,Technology,Mexico,Active
+V00342,Inc Hub 4598,Real Estate,USA,Active
+V00343,Ltd Logistics 6052,Energy,Mexico,Active
+V00344,Global Enterprises 7279,Technology,Canada,Active
+V00345,Smart Ltd 6101,Healthcare,Germany,On Hold
+V00346,Tech Inc 2613,Real Estate,Germany,Active
+V00347,Supply Center 1359,Finance,Canada,On Hold
+V00348,Supply Logistics 5250,Real Estate,UK,Active
+V00349,Services Global 3148,Telecommunications,India,Inactive
+V00350,Innovations Services 4388,Construction,UK,Inactive
+V00351,Digital Inc 4778,Media,Germany,Active
+V00352,Services Enterprises 1313,Telecommunications,Canada,Inactive
+V00353,Solutions Pro 5792,Media,USA,On Hold
+V00354,Innovations Data 5014,Hospitality,Canada,Active
+V00355,Supply Partners 3773,Logistics,Canada,Active
+V00356,Smart Group 530,Healthcare,India,On Hold
+V00357,Supply Center 9138,Consulting,India,Active
+V00358,Solutions Data 6623,Media,Mexico,Inactive
+V00359,Partners Hub 6808,Hospitality,India,Active
+V00360,Enterprises Pro 1315,Telecommunications,Germany,On Hold
+V00361,Supply Enterprises 9132,Real Estate,India,Active
+V00362,Enterprises Hub 8338,Food & Beverage,USA,Active
+V00363,Partners Enterprises 5082,Consulting,Canada,Active
+V00364,Smart Supply 8601,Food & Beverage,UK,Active
+V00365,Cloud Digital 9124,Retail,Canada,Active
+V00366,Inc Innovations 1630,Energy,Mexico,Active
+V00367,Corp Corp 2626,Consulting,Mexico,On Hold
+V00368,Inc Pro 9334,Technology,USA,Active
+V00369,Tech Ltd 9549,Retail,Mexico,Active
+V00370,Corp Hub 596,Telecommunications,Mexico,On Hold
+V00371,Data Ltd 5049,Telecommunications,Canada,Inactive
+V00372,Data Center 1295,Media,USA,Active
+V00373,Center Hub 8033,Telecommunications,Canada,Active
+V00374,Inc Enterprises 5221,Hospitality,Mexico,Active
+V00375,Supply Logistics 2242,Construction,UK,On Hold
+V00376,Innovations Services 5328,Manufacturing,Germany,Active
+V00377,Cloud Center 4161,Consulting,USA,Active
+V00378,Data Logistics 6950,Manufacturing,Canada,Active
+V00379,Corp Pro 3210,Construction,Canada,Inactive
+V00380,Partners Center 8271,Food & Beverage,UK,Inactive
+V00381,Global Solutions 6542,Energy,Germany,Active
+V00382,Digital Corp 5881,Technology,USA,Active
+V00383,Group Inc 7810,Retail,India,Active
+V00384,Services Hub 2294,Food & Beverage,UK,Active
+V00385,Logistics Supply 841,Education,USA,On Hold
+V00386,Innovations Digital 6039,Energy,UK,Active
+V00387,Logistics Partners 7478,Construction,India,Active
+V00388,Inc Inc 2046,Consulting,USA,Inactive
+V00389,Supply Pro 9239,Healthcare,Canada,Active
+V00390,Inc Partners 6676,Energy,USA,Active
+V00391,Tech Enterprises 5556,Construction,Germany,On Hold
+V00392,Center Enterprises 8546,Consulting,UK,On Hold
+V00393,Pro Systems 6538,Finance,Mexico,Active
+V00394,Corp Pro 8411,Hospitality,India,On Hold
+V00395,Group Corp 5011,Telecommunications,USA,Active
+V00396,Pro Services 6924,Finance,UK,Active
+V00397,Inc Group 4450,Real Estate,India,On Hold
+V00398,Smart Tech 9660,Telecommunications,Canada,On Hold
+V00399,Ltd Inc 6329,Consulting,Mexico,Active
+V00400,Tech Corp 1900,Manufacturing,USA,Inactive
+V00401,Pro Hub 2581,Education,Mexico,Active
+V00402,Hub Partners 7826,Hospitality,Mexico,Active
+V00403,Enterprises Partners 3497,Energy,UK,Inactive
+V00404,Partners Logistics 5240,Consulting,Germany,On Hold
+V00405,Pro Innovations 5904,Real Estate,Mexico,Active
+V00406,Inc Group 3250,Manufacturing,UK,On Hold
+V00407,Data Smart 4976,Construction,UK,Active
+V00408,Group Pro 7961,Healthcare,India,Active
+V00409,Data Services 9495,Real Estate,India,Inactive
+V00410,Logistics Supply 2499,Retail,USA,Active
+V00411,Solutions Supply 7347,Real Estate,UK,Inactive
+V00412,Digital Digital 8924,Retail,India,Active
+V00413,Enterprises Services 9714,Manufacturing,Canada,Active
+V00414,Partners Smart 3914,Technology,USA,Inactive
+V00415,Pro Group 1747,Real Estate,Canada,Active
+V00416,Innovations Systems 6766,Real Estate,Germany,Inactive
+V00417,Ltd Digital 4806,Healthcare,UK,Active
+V00418,Solutions Ltd 9506,Manufacturing,India,Active
+V00419,Systems Hub 2980,Food & Beverage,USA,Inactive
+V00420,Group Systems 4842,Food & Beverage,USA,Active
+V00421,Data Corp 9975,Logistics,UK,Active
+V00422,Center Ltd 9001,Energy,Germany,Active
+V00423,Partners Center 4570,Manufacturing,USA,Active
+V00424,Systems Center 4315,Media,Canada,Active
+V00425,Pro Data 9402,Real Estate,Canada,Active
+V00426,Inc Ltd 6743,Hospitality,Germany,On Hold
+V00427,Pro Solutions 6667,Real Estate,USA,Active
+V00428,Enterprises Group 5401,Food & Beverage,Canada,Active
+V00429,Cloud Logistics 3958,Telecommunications,UK,Active
+V00430,Data Corp 9486,Technology,UK,Active
+V00431,Smart Tech 2036,Telecommunications,UK,Active
+V00432,Logistics Partners 5195,Media,USA,Active
+V00433,Supply Inc 3718,Manufacturing,Canada,Inactive
+V00434,Enterprises Center 6221,Education,Mexico,On Hold
+V00435,Group Innovations 3678,Construction,Canada,On Hold
+V00436,Solutions Partners 7419,Energy,Mexico,Active
+V00437,Solutions Corp 1938,Technology,India,On Hold
+V00438,Digital Corp 8892,Consulting,Canada,Active
+V00439,Partners Center 2004,Real Estate,Canada,On Hold
+V00440,Group Solutions 8461,Telecommunications,USA,Inactive
+V00441,Enterprises Partners 6906,Telecommunications,India,Active
+V00442,Innovations Center 5149,Media,USA,Inactive
+V00443,Cloud Global 3670,Finance,USA,Active
+V00444,Hub Supply 1144,Energy,USA,Active
+V00445,Group Tech 4803,Education,Canada,Active
+V00446,Ltd Ltd 6987,Healthcare,Germany,Inactive
+V00447,Logistics Logistics 1414,Real Estate,Mexico,On Hold
+V00448,Enterprises Ltd 5797,Logistics,Canada,On Hold
+V00449,Logistics Partners 2186,Media,Canada,Active
+V00450,Global Data 7685,Real Estate,Mexico,On Hold
+V00451,Hub Innovations 6314,Hospitality,Canada,Active
+V00452,Center Supply 2641,Retail,Canada,Active
+V00453,Tech Hub 356,Manufacturing,Canada,Active
+V00454,Services Inc 650,Telecommunications,India,Active
+V00455,Smart Tech 6690,Telecommunications,Canada,On Hold
+V00456,Digital Tech 2395,Energy,UK,Active
+V00457,Corp Pro 9561,Finance,Mexico,Active
+V00458,Smart Data 2447,Real Estate,India,Active
+V00459,Hub Data 4608,Technology,India,On Hold
+V00460,Systems Ltd 7099,Energy,Germany,Active
+V00461,Supply Ltd 6344,Construction,India,Active
+V00462,Hub Hub 2544,Retail,Germany,Active
+V00463,Innovations Group 4048,Hospitality,Canada,Active
+V00464,Enterprises Center 1044,Energy,Germany,Inactive
+V00465,Innovations Partners 2296,Education,Canada,Active
+V00466,Digital Pro 1395,Food & Beverage,Germany,Active
+V00467,Solutions Innovations 3220,Technology,UK,Inactive
+V00468,Inc Inc 747,Hospitality,USA,Active
+V00469,Corp Innovations 3655,Telecommunications,Canada,Active
+V00470,Data Global 3570,Food & Beverage,Canada,Active
+V00471,Group Smart 3450,Education,Canada,On Hold
+V00472,Pro Data 6336,Telecommunications,India,Active
+V00473,Data Cloud 5992,Energy,Germany,Inactive
+V00474,Services Group 5346,Food & Beverage,Canada,Active
+V00475,Pro Hub 849,Finance,Canada,Active
+V00476,Global Cloud 9165,Food & Beverage,India,On Hold
+V00477,Hub Data 2597,Manufacturing,UK,Active
+V00478,Logistics Corp 4126,Telecommunications,India,Active
+V00479,Cloud Group 8137,Telecommunications,Canada,Active
+V00480,Systems Enterprises 9054,Telecommunications,Canada,On Hold
+V00481,Ltd Tech 8684,Technology,USA,Active
+V00482,Global Hub 2352,Hospitality,Mexico,Active
+V00483,Solutions Enterprises 249,Manufacturing,India,Inactive
+V00484,Supply Tech 8016,Real Estate,Germany,Active
+V00485,Global Innovations 9138,Education,USA,Active
+V00486,Partners Cloud 8877,Retail,USA,On Hold
+V00487,Hub Systems 1853,Food & Beverage,USA,On Hold
+V00488,Enterprises Smart 3244,Finance,India,Active
+V00489,Supply Cloud 6602,Logistics,UK,Inactive
+V00490,Center Corp 4084,Media,Canada,Active
+V00491,Solutions Ltd 619,Logistics,Germany,Inactive
+V00492,Logistics Innovations 7898,Technology,Mexico,Active
+V00493,Systems Solutions 8289,Hospitality,Germany,Active
+V00494,Corp Services 8753,Food & Beverage,USA,Active
+V00495,Digital Corp 7890,Retail,USA,Active
+V00496,Cloud Innovations 9332,Real Estate,USA,Active
+V00497,Pro Global 3494,Finance,Canada,Inactive
+V00498,Solutions Data 2761,Finance,Canada,On Hold
+V00499,Logistics Innovations 5535,Education,Mexico,Active
+V00500,Solutions Partners 5766,Technology,USA,Inactive
+V00501,Smart Solutions 5680,Finance,India,On Hold
+V00502,Logistics Pro 585,Real Estate,UK,Inactive
+V00503,Group Smart 5929,Energy,Germany,Inactive
+V00504,Systems Corp 6327,Logistics,India,Active
+V00505,Smart Solutions 1444,Retail,Canada,Inactive
+V00506,Ltd Enterprises 6483,Healthcare,UK,Active
+V00507,Solutions Global 5150,Telecommunications,UK,Active
+V00508,Services Enterprises 1530,Consulting,Germany,Inactive
+V00509,Innovations Innovations 8495,Education,USA,Active
+V00510,Solutions Supply 9180,Logistics,India,On Hold
+V00511,Pro Logistics 302,Retail,Germany,Inactive
+V00512,Solutions Innovations 4077,Finance,India,Active
+V00513,Logistics Systems 2374,Retail,UK,Active
+V00514,Group Enterprises 1136,Consulting,Germany,Active
+V00515,Hub Data 8033,Construction,USA,Active
+V00516,Cloud Smart 8223,Finance,India,Active
+V00517,Center Services 2319,Retail,USA,Inactive
+V00518,Pro Inc 6324,Construction,UK,Inactive
+V00519,Pro Hub 9838,Consulting,UK,Active
+V00520,Inc Digital 7948,Healthcare,Canada,Inactive
+V00521,Pro Data 8144,Finance,Canada,Active
+V00522,Logistics Cloud 6537,Healthcare,USA,On Hold
+V00523,Digital Corp 9039,Consulting,Mexico,On Hold
+V00524,Global Center 3534,Telecommunications,UK,Active
+V00525,Hub Group 2380,Real Estate,UK,Active
+V00526,Cloud Enterprises 7032,Construction,Germany,Active
+V00527,Center Inc 7951,Finance,Germany,On Hold
+V00528,Partners Hub 9007,Technology,UK,On Hold
+V00529,Inc Ltd 1492,Logistics,Canada,Active
+V00530,Systems Ltd 825,Finance,Mexico,Inactive
+V00531,Pro Hub 1835,Technology,USA,Active
+V00532,Smart Partners 8599,Energy,India,On Hold
+V00533,Smart Center 6229,Education,Germany,On Hold
+V00534,Partners Enterprises 5751,Technology,Germany,Active
+V00535,Data Hub 1506,Logistics,Mexico,Active
+V00536,Supply Data 5720,Telecommunications,Canada,On Hold
+V00537,Group Supply 7901,Logistics,Germany,Inactive
+V00538,Pro Solutions 5019,Technology,Mexico,Active
+V00539,Global Pro 1891,Real Estate,Canada,Active
+V00540,Partners Systems 9142,Consulting,UK,On Hold
+V00541,Hub Center 3898,Construction,Germany,Active
+V00542,Systems Ltd 7180,Education,USA,On Hold
+V00543,Digital Center 9802,Education,Germany,Active
+V00544,Digital Digital 4660,Construction,Mexico,Active
+V00545,Corp Services 8896,Consulting,UK,Active
+V00546,Digital Center 1967,Retail,Mexico,Inactive
+V00547,Partners Ltd 5234,Finance,Germany,On Hold
+V00548,Logistics Corp 1971,Healthcare,UK,Inactive
+V00549,Inc Systems 4973,Food & Beverage,India,On Hold
+V00550,Solutions Enterprises 5231,Logistics,Canada,Active

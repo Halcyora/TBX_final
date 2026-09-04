@@ -1,0 +1,33 @@
+account_id,account_name,account_type,category
+1000,Cash,Assets,Assets
+1001,Accounts Receivable,Assets,Assets
+1002,Inventory,Assets,Assets
+1003,Equipment,Assets,Assets
+1004,Prepaid Expenses,Assets,Assets
+1005,Accounts Payable,Liabilities,Liabilities
+1006,Short-term Debt,Liabilities,Liabilities
+1007,Long-term Debt,Liabilities,Liabilities
+1008,Accrued Expenses,Liabilities,Liabilities
+1009,Common Stock,Equity,Equity
+1010,Retained Earnings,Equity,Equity
+1011,Additional Paid-in Capital,Equity,Equity
+1012,Product Sales,Revenue,Revenue
+1013,Service Revenue,Revenue,Revenue
+1014,Subscription Revenue,Revenue,Revenue
+1015,Consulting,Revenue,Revenue
+1016,Salaries & Wages,Expenses,Expenses
+1017,Rent,Expenses,Expenses
+1018,Utilities,Expenses,Expenses
+1019,Office Supplies,Expenses,Expenses
+1020,Travel,Expenses,Expenses
+1021,Marketing,Expenses,Expenses
+1022,Maintenance,Expenses,Expenses
+1023,Insurance,Expenses,Expenses
+1024,Professional Services,Expenses,Expenses
+1025,Depreciation,Expenses,Expenses
+1026,Vendor Payments,Expenses,Expenses
+1027,Payroll Tax,Expenses,Expenses
+1028,Benefits,Expenses,Expenses
+1029,Shipping & Logistics,Expenses,Expenses
+1030,Research & Development,Expenses,Expenses
+1031,Software Licenses,Expenses,Expenses
