@@ -84,6 +84,10 @@ def _call_vllm(prompt: str, system: Optional[str], max_tokens: int, temperature:
         headers={"Content-Type": "application/json"},
         timeout=30.0,
     )
+    if response.status_code >= 400:
+        # Surface the server's actual error body (e.g. context-length exceeded) instead of
+        # just the generic status code, so failures are diagnosable from the logs
+        logger.warning(f"vLLM returned {response.status_code}: {response.text[:500]}")
     response.raise_for_status()
     data = response.json()
     return data["choices"][0]["message"]["content"]
@@ -187,7 +191,7 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         prompt = build_classification_prompt(state.user_query, history_context, entity_id=state.entity_id)
 
         response_text = await asyncio.to_thread(
-            call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+            call_llm, prompt, model_alias=state.model_used, max_tokens=400, temperature=0.1
         )
         
         # Try to extract JSON
@@ -286,8 +290,10 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         # Now generate SQL with few-shot examples
         few_shot_prompt = build_few_shot_prompt(state.user_query, history_context, entity_id=state.entity_id)
         
+        # Prompt is already large (system prompt + all few-shot examples) relative to the model's
+        # 4096-token context window, so keep max_tokens modest - SQL queries rarely need more.
         sql_text = (await asyncio.to_thread(
-            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.1
         )).strip()
         
         # Clean up SQL (remove markdown formatting if present)
@@ -332,7 +338,7 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
             # re-checked with the same static safety net before being trusted for execution
             corrected_sql = (await asyncio.to_thread(
                 call_llm, SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
-                model_alias=state.model_used, max_tokens=1024, temperature=0.0
+                model_alias=state.model_used, max_tokens=512, temperature=0.0
             )).strip()
             
             if "```sql" in corrected_sql:
@@ -386,7 +392,7 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
             try:
                 repair_prompt = SQL_REPAIR_PROMPT.format(sql=state.sql_query, error=str(result))
                 repaired_sql = (await asyncio.to_thread(
-                    call_llm, repair_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.0
+                    call_llm, repair_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.0
                 )).strip()
                 if "```sql" in repaired_sql:
                     repaired_sql = repaired_sql.split("```sql")[1].split("```")[0].strip()
