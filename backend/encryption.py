@@ -5,7 +5,11 @@ that requires a valid decryption code.
 """
 
 import os
+import base64
+import hashlib
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 import logging
 
 logger = logging.getLogger(__name__)
@@ -115,3 +119,102 @@ class AccountEncryption:
             return "X" * len(account_number)
         
         return "X" * (len(account_number) - show_last_n) + account_number[-show_last_n:]
+    
+    @staticmethod
+    def _get_aes256_key() -> bytes:
+        """
+        Get or derive AES256 key for UTR encryption.
+        Uses ENCRYPTION_KEY environment variable and derives a 256-bit key using SHA256.
+        """
+        key_str = os.getenv("ENCRYPTION_KEY", "default-utr-key")
+        # Derive a 256-bit (32 byte) key using SHA256
+        key = hashlib.sha256(key_str.encode()).digest()
+        return key
+    
+    @staticmethod
+    def encrypt_utr_aes256(utr_number: str) -> str:
+        """
+        Encrypt a UTR number using AES256-CBC encryption.
+        
+        Args:
+            utr_number: The UTR number to encrypt
+            
+        Returns:
+            Base64-encoded encrypted UTR (format: "AES256:<base64>")
+        """
+        try:
+            key = AccountEncryption._get_aes256_key()
+            # Generate a random 16-byte IV
+            iv = os.urandom(16)
+            
+            # Create cipher and encryptor
+            cipher = Cipher(
+                algorithms.AES(key),
+                modes.CBC(iv),
+                backend=default_backend()
+            )
+            encryptor = cipher.encryptor()
+            
+            # Pad the message to AES block size (16 bytes)
+            plaintext = utr_number.encode()
+            padding_length = 16 - (len(plaintext) % 16)
+            padded_plaintext = plaintext + bytes([padding_length] * padding_length)
+            
+            # Encrypt
+            ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
+            
+            # Return IV + ciphertext, base64 encoded with AES256 prefix
+            encrypted_data = base64.b64encode(iv + ciphertext).decode()
+            return f"AES256:{encrypted_data}"
+            
+        except Exception as e:
+            logger.error(f"Failed to encrypt UTR with AES256: {e}")
+            raise
+    
+    @staticmethod
+    def decrypt_utr_aes256(encrypted_utr: str) -> str:
+        """
+        Decrypt a UTR number encrypted with AES256-CBC.
+        
+        Args:
+            encrypted_utr: The encrypted UTR (format: "AES256:<base64>" or plain base64 for compatibility)
+            
+        Returns:
+            The decrypted UTR number
+        """
+        try:
+            # Handle both "AES256:<base64>" and plain base64 formats
+            if encrypted_utr.startswith("AES256:"):
+                encrypted_data = encrypted_utr[7:]  # Remove "AES256:" prefix
+            else:
+                encrypted_data = encrypted_utr
+            
+            key = AccountEncryption._get_aes256_key()
+            
+            # Decode from base64
+            encrypted_bytes = base64.b64decode(encrypted_data)
+            
+            # Extract IV (first 16 bytes) and ciphertext (remaining bytes)
+            iv = encrypted_bytes[:16]
+            ciphertext = encrypted_bytes[16:]
+            
+            # Create cipher and decryptor
+            cipher = Cipher(
+                algorithms.AES(key),
+                modes.CBC(iv),
+                backend=default_backend()
+            )
+            decryptor = cipher.decryptor()
+            
+            # Decrypt
+            padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+            
+            # Remove padding
+            padding_length = padded_plaintext[-1]
+            plaintext = padded_plaintext[:-padding_length]
+            
+            return plaintext.decode()
+            
+        except Exception as e:
+            logger.error(f"Failed to decrypt UTR with AES256: {e}")
+            raise ValueError("Failed to decrypt UTR - invalid encrypted value or wrong key")

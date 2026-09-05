@@ -156,30 +156,53 @@ class FinanceDB:
         self._create_indexes()
     
     def _encrypt_account_numbers(self):
-        """Encrypt account numbers in the account table"""
+        """Encrypt account numbers and UTR numbers (AES256) in database tables"""
         try:
-            # First, ensure the account_number_masked column exists (add if missing)
+            # Encrypt account numbers in account table
             try:
                 self.conn.execute("ALTER TABLE account ADD COLUMN account_number_masked VARCHAR(20)")
             except:
                 pass  # Column already exists
             
-            # Get all account numbers
-            rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
+            # Get all account numbers from account table
+            account_rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
             
-            # Encrypt each account number and update the table
-            for account_id, account_number in rows:
+            # Encrypt each account number (Fernet encryption), skipping values already encrypted
+            encrypted_count = 0
+            for account_id, account_number in account_rows:
+                if account_number.startswith("gAAAAA"):
+                    continue  # already Fernet-encrypted at the source
                 encrypted = AccountEncryption.encrypt_account_number(account_number)
-                # Also create a masked display version (XXXXXXXX + last 4 digits)
                 masked_display = AccountEncryption.mask_account_number(account_number)
                 self.conn.execute(
                     "UPDATE account SET account_number = ?, account_number_masked = ? WHERE account_id = ?",
                     (encrypted, masked_display, account_id)
                 )
+                encrypted_count += 1
             
-            logger.info(f"  ✓ Encrypted {len(rows)} account numbers in the database")
+            logger.info(f"  ✓ Encrypted {encrypted_count} account numbers in the database")
+            
+            # Encrypt UTR numbers in transaction table with AES256 (lazy decryption)
+            # Check if transaction table has utr_number column
+            try:
+                utr_rows = self.conn.execute("SELECT transaction_id, utr_number FROM transaction WHERE utr_number IS NOT NULL").fetchall()
+                if utr_rows:
+                    encrypted_utr_count = 0
+                    for transaction_id, utr_number in utr_rows:
+                        if utr_number.startswith("AES256:"):
+                            continue  # already AES256-encrypted at the source
+                        encrypted_utr = AccountEncryption.encrypt_utr_aes256(utr_number)
+                        self.conn.execute(
+                            "UPDATE transaction SET utr_number = ? WHERE transaction_id = ?",
+                            (encrypted_utr, transaction_id)
+                        )
+                        encrypted_utr_count += 1
+                    logger.info(f"  ✓ Encrypted {encrypted_utr_count} UTR numbers with AES256 (lazy decryption)")
+            except Exception as e:
+                logger.debug(f"UTR encryption skipped (column may not exist or no data): {e}")
+        
         except Exception as e:
-            logger.error(f"Failed to encrypt account numbers: {e}")
+            logger.error(f"Failed to encrypt sensitive data: {e}")
             raise
     
     def _create_indexes(self):

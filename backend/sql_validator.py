@@ -90,31 +90,12 @@ class SQLValidator:
     
     @staticmethod
     def _check_table_references(sql: str) -> Tuple[bool, str]:
-        """Verify only allowed tables are referenced"""
+        """Verify only allowed tables are referenced (regex-based - robust against
+        sqlparse token-type quirks that previously let unknown table names slip through)"""
         try:
-            parsed = sqlparse.parse(sql)[0]
-            
-            # Extract table names from FROM and JOIN clauses
-            from_seen = False
-            join_seen = False
-            tables_found = set()
-            
-            tokens = list(parsed.flatten())
-            for i, token in enumerate(tokens):
-                token_str = str(token).strip().upper()
-                
-                if token_str in ('FROM', 'JOIN'):
-                    from_seen = True
-                    continue
-                
-                if from_seen and token.ttype is None and token_str not in (',', 'ON', 'WHERE', 'GROUP', 'ORDER', 'LIMIT'):
-                    # This might be a table name
-                    clean_name = token_str.lower().split()[0]  # Handle aliases
-                    if clean_name and not clean_name.startswith('('):
-                        tables_found.add(clean_name)
-                    from_seen = False
-            
-            # Check if all tables are allowed
+            matches = re.findall(r'\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)', sql, re.IGNORECASE)
+            tables_found = {m.lower() for m in matches}
+
             invalid_tables = tables_found - SQLValidator.ALLOWED_TABLES
             if invalid_tables:
                 return False, f"Unauthorized table access: {invalid_tables}"

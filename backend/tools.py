@@ -23,8 +23,12 @@ class QueryExecutor:
     @staticmethod
     def _decrypt_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Decrypt sensitive columns (account_number, utr_number) in query results.
-        Happens after SQL execution for efficiency - fetch first, decrypt only what's needed.
+        Lazy decryption of sensitive columns at query result time (minimal latency).
+        Only decrypts columns present in results to avoid wasted CPU on absent fields.
+        - account_number: Fernet (symmetric) decryption
+        - utr_number: AES256-CBC decryption
+        
+        This approach: fetch encrypted data fast, decrypt only returned rows/columns.
         """
         if not results:
             return results
@@ -33,7 +37,7 @@ class QueryExecutor:
         for row in results:
             decrypted_row = row.copy()
             
-            # Decrypt account_number if present
+            # Decrypt account_number (Fernet) only if present and not null
             if "account_number" in decrypted_row and decrypted_row["account_number"]:
                 try:
                     decrypted_account = AccountEncryption.decrypt_account_number(decrypted_row["account_number"])
@@ -41,13 +45,13 @@ class QueryExecutor:
                 except Exception as e:
                     logger.warning(f"Failed to decrypt account_number: {e}, keeping encrypted value")
             
-            # Decrypt utr_number if present
+            # Decrypt utr_number (AES256) only if present and not null
             if "utr_number" in decrypted_row and decrypted_row["utr_number"]:
                 try:
-                    decrypted_utr = AccountEncryption.decrypt_account_number(decrypted_row["utr_number"])
+                    decrypted_utr = AccountEncryption.decrypt_utr_aes256(decrypted_row["utr_number"])
                     decrypted_row["utr_number"] = decrypted_utr
                 except Exception as e:
-                    logger.warning(f"Failed to decrypt utr_number: {e}, keeping encrypted value")
+                    logger.warning(f"Failed to decrypt utr_number with AES256: {e}, keeping encrypted value")
             
             decrypted_results.append(decrypted_row)
         

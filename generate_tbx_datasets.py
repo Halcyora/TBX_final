@@ -20,8 +20,14 @@ Data Specifications:
 import csv
 import uuid
 import random
+import sys
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Add backend to path for importing encryption module
+sys.path.insert(0, str(Path(__file__).parent / "backend"))
+from encryption import AccountEncryption
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -260,7 +266,55 @@ ENCRYPTED_UTRS = [
 ]
 
 REPEATED_REF_IDS = ["S31125841", "HDFCH01078329532", "103293775381", "REF_DUPLICATE_9999", "REF_SHARED_1000"]
-REPEATED_UTRS = ["jhI5nAdyb1qOEjmcB3JvWjC6tTO+ZPVqBFPm/GiErC4TRBWRQ5ylPG3p", "UTR_SHARED_99999"]
+
+def generate_aes256_encrypted_utrs(count=8):
+    """Generate realistic UTR numbers and encrypt them with AES256."""
+    plaintext_utrs = [
+        "HDFC20250101000001",
+        "ICIC20250102000002",
+        "SBIN20250103000003",
+        "UTIB20250104000004",
+        "KKBK20250105000005",
+        "CNRB20250106000006",
+        "UBIN20250107000007",
+        "AUBL20250108000008",
+    ]
+    
+    encrypted_utrs = []
+    for utr in plaintext_utrs[:count]:
+        try:
+            encrypted = AccountEncryption.encrypt_utr_aes256(utr)
+            encrypted_utrs.append(encrypted)
+        except Exception as e:
+            print(f"Warning: Failed to encrypt UTR {utr}: {e}")
+            # Fallback to plaintext if encryption fails
+            encrypted_utrs.append(utr)
+    
+    return encrypted_utrs
+
+# Generate encrypted UTRs with AES256
+ENCRYPTED_UTRS = []
+try:
+    ENCRYPTED_UTRS = generate_aes256_encrypted_utrs(8)
+except Exception as e:
+    print(f"Warning: Could not generate AES256-encrypted UTRs: {e}")
+    print("Falling back to sample encrypted values...")
+    # Fallback sample values if encryption module is not available
+    ENCRYPTED_UTRS = [
+        "AES256:gAAAAABlq1Z1...",  # Placeholder
+        "AES256:gAAAAABlq1Z2...",
+        "AES256:gAAAAABlq1Z3...",
+        "AES256:gAAAAABlq1Z4...",
+        "AES256:gAAAAABlq1Z5...",
+        "AES256:gAAAAABlq1Z6...",
+        "AES256:gAAAAABlq1Z7...",
+        "AES256:gAAAAABlq1Z8...",
+    ]
+
+REPEATED_UTRS = [
+    ENCRYPTED_UTRS[0] if ENCRYPTED_UTRS else "UTR_SHARED_99999",
+    "UTR_SHARED_PLAINTEXT"
+]
 
 def generate_large_dataset(num_transactions=500000, num_accounts=10000):
     print(f"[*] Generating Large Dataset ({num_transactions:,} txns, {num_accounts:,} accounts, ~50 banks)...")
