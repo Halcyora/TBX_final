@@ -24,6 +24,7 @@ from prompts import (
 from sql_validator import SQLValidator
 from tools import QueryExecutor, AnomalyDetector, DataExporter, ContextManager
 from query_cache import get_cached_sql, store_verified_sql
+from crypto_utils import decrypt_results
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -439,7 +440,15 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         success, result = QueryExecutor.execute(state.sql_query)
         
         if success:
-            state.query_results = result if isinstance(result, list) else [result]
+            rows = result if isinstance(result, list) else [result]
+            # Decrypt sensitive columns (account_number, utr_number) here, on the final,
+            # already-small result set that's about to be shown/exported - never eagerly, and
+            # never before/during filtering (ciphertext can't be filtered on anyway; see
+            # sql_validator.py's _check_encrypted_column_usage). Self-consistency's trial
+            # executions in sql_generation_node vote on raw (undecrypted) results since the
+            # stored ciphertext is already a stable per-row identifier - this is the one point
+            # where the values that actually reach the user get decrypted.
+            state.query_results = decrypt_results(rows)
             state.execution_error = None  # clear any stale error from a pre-repair attempt
             state.processing_stages_completed.append("query_execution")
             state.stage_details["query_execution"] = f"{len(state.query_results)} row(s) returned"

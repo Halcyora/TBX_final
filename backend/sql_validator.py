@@ -24,10 +24,15 @@ class SQLValidator:
     
     # Dangerous SQL keywords to prevent
     DANGEROUS_KEYWORDS = {
-        'DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER', 
+        'DROP', 'DELETE', 'UPDATE', 'INSERT', 'CREATE', 'ALTER',
         'TRUNCATE', 'EXEC', 'EXECUTE'
     }
-    
+
+    # Encrypted at rest (AES-256-GCM, see backend/crypto_utils.py) - each row's ciphertext was
+    # encrypted independently, so a WHERE/JOIN match against either can never succeed.
+    ENCRYPTED_COLUMNS = ('account_number', 'utr_number')
+
+
     @staticmethod
     def validate_query(sql: str) -> Tuple[bool, str]:
         """
@@ -62,8 +67,33 @@ class SQLValidator:
         if not cheap_join:
             return False, f"Query cost check failed: {join_msg}"
 
+        # 6. Check for filter/join attempts against encrypted columns
+        no_crypto_filter, crypto_msg = SQLValidator._check_encrypted_column_usage(sql)
+        if not no_crypto_filter:
+            return False, f"Encrypted column check failed: {crypto_msg}"
+
         logger.info("SQL query passed all validation checks")
         return True, "Query is valid"
+
+    @staticmethod
+    def _check_encrypted_column_usage(sql: str) -> Tuple[bool, str]:
+        """Reject a WHERE or JOIN...ON condition that compares an encrypted column (see
+        ENCRYPTED_COLUMNS) against anything other than IS [NOT] NULL. Such a comparison can
+        never match real data - decryption happens only after execution, on the result set."""
+        clauses = re.findall(r'\bWHERE\b(.*?)(?=\bGROUP\b|\bORDER\b|\bLIMIT\b|$)', sql, re.IGNORECASE | re.DOTALL)
+        clauses += re.findall(r'\bON\b(.*?)(?=\bJOIN\b|\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|$)', sql, re.IGNORECASE | re.DOTALL)
+
+        for clause in clauses:
+            for col in SQLValidator.ENCRYPTED_COLUMNS:
+                for m in re.finditer(r'\b' + col + r'\b', clause, re.IGNORECASE):
+                    tail = clause[m.end():].lstrip()
+                    if not re.match(r'IS\s+(NOT\s+)?NULL\b', tail, re.IGNORECASE):
+                        return False, (
+                            f"'{col}' is encrypted at rest and can't be matched by a WHERE/JOIN "
+                            f"condition (only IS NULL / IS NOT NULL is allowed on it) - remove "
+                            f"the filter or ask for a different identifier"
+                        )
+        return True, ""
 
     @staticmethod
     def _check_join_cost(sql: str) -> Tuple[bool, str]:

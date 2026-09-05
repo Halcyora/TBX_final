@@ -142,7 +142,9 @@ bank:
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
 - entity_id (VARCHAR): Entity/customer ID (UUID)
-- account_number (VARCHAR): Account number (SENSITIVE - mask in output)
+- account_number (VARCHAR): Account number - ENCRYPTED AT REST, decrypted automatically for
+  display after your query runs. SELECT it freely; never filter/JOIN on it (every row's
+  ciphertext was encrypted independently, so it can never match).
 - program_id (INTEGER): Program ID (0, 4, 21, 46, 99)
 - available_balance (DECIMAL): Balance (can be negative, zero, or extreme values) - already numeric, no CAST needed
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
@@ -154,8 +156,8 @@ transaction:
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description
 - transaction_amount (DECIMAL): Amount (can be 0.00, extreme values, etc.) - already numeric, no CAST needed
-- transaction_reference_id (VARCHAR): Reference number (often NULL, can be duplicated)
-- utr_number (VARCHAR): UTR (often NULL, encrypted, or plaintext)
+- transaction_reference_id (VARCHAR): Reference number, PLAINTEXT (often NULL, can be duplicated)
+- utr_number (VARCHAR): UTR - ENCRYPTED AT REST for most rows, same rule as account_number
 
 RULES:
 1. Use date filters ONLY when the question explicitly mentions a time period.
@@ -166,6 +168,8 @@ RULES:
 6. A missing reference/UTR is a real SQL NULL - check with IS NULL / IS NOT NULL, never "= ''".
 7. Assume 'today' is 2026-09-05 for relative date phrases like 'last month'.
 8. Always include ID columns (account_id, transaction_id) in SELECT for unique identification.
+9. account_number and utr_number are encrypted - only IS NULL/IS NOT NULL checks are allowed on
+   them, never an equality filter or a JOIN condition.
 
 OUTPUT FORMAT: Return ONLY the SQL query, no markdown fences, no explanation."""
 

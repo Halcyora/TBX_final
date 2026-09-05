@@ -22,7 +22,11 @@ bank:
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
-- account_number (VARCHAR): Account number (SENSITIVE - mask in output)
+- account_number (VARCHAR): Account number - ENCRYPTED AT REST (AES-256-GCM ciphertext). The app
+  decrypts it automatically after your query runs, for display only. You may SELECT it, but NEVER
+  filter or JOIN on it - each row's ciphertext was encrypted independently, so a WHERE/JOIN
+  match against it (or against another row's copy of it) can never succeed. Including it in a
+  SELECT list or a GROUP BY alongside a real key column (e.g. account_id) is fine.
 - program_id (INTEGER): Program/product ID (0, 4, 21, 46, 99)
 - available_balance (DECIMAL): Account balance (can be negative, zero, or extreme values) - already numeric, no CAST needed
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
@@ -34,8 +38,11 @@ transaction:
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description (can contain special chars, quotes, slashes)
 - transaction_amount (DECIMAL): Amount (can be 0.00, micro amounts, or extreme values) - already numeric, no CAST needed
-- transaction_reference_id (VARCHAR): Reference/receipt number (often NULL, can be duplicated)
-- utr_number (VARCHAR): Unique Transaction Reference (often NULL, encrypted, or plaintext)
+- transaction_reference_id (VARCHAR): Reference/receipt number, PLAINTEXT and directly searchable
+  (often NULL, can be duplicated) - this is NOT the same column as utr_number, do not confuse them.
+- utr_number (VARCHAR): Unique Transaction Reference - ENCRYPTED AT REST for most rows (some rows
+  are legitimately plaintext or NULL). Same rule as account_number: SELECT it freely for display,
+  but NEVER filter or JOIN on it (GROUP BY alongside a real key column is fine).
 
 IMPORTANT RULES:
 1. Add a DATE FILTER only when the user's question explicitly mentions a time period (last month, Q3, 2026, etc).
@@ -56,7 +63,12 @@ IMPORTANT RULES:
 6. Return meaningful column names using AS aliases
 7. All numeric and date columns are already properly typed (DECIMAL / TIMESTAMP / INTEGER) -
    never wrap them in CAST(... AS DECIMAL); just compare/aggregate them directly.
-8. Always think step-by-step before writing SQL.
+8. account_number and utr_number are encrypted at rest - SELECT them freely, and IS NULL /
+   IS NOT NULL checks are fine, but any other filter or JOIN condition on either one will be
+   rejected before it even runs. If the user wants to look up a record BY account number or
+   UTR, that isn't possible via SQL on encrypted columns - ask for a different identifier
+   instead (account_id, transaction_id, bank + date range).
+9. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -232,6 +244,28 @@ FROM (
 WHERE gap IS NOT NULL
 GROUP BY account_id
 ORDER BY longest_gap DESC"""
+    },
+    {
+        "question": "For each bank, show the account number of the account with the highest available balance",
+        "reasoning": (
+            "This needs the account_number FROM THE SAME ROW as the max balance, not just "
+            "'the highest balance' and 'some account_number' computed independently -  "
+            "MAX(available_balance) and MAX(account_number) in the same GROUP BY are two "
+            "unrelated aggregates and can silently pair values from two different accounts. "
+            "Use ROW_NUMBER() OVER (PARTITION BY bank_code ORDER BY available_balance DESC) to "
+            "rank accounts within each bank, then keep only rank 1 - that keeps every selected "
+            "column tied to the correct single row."
+        ),
+        "sql": """SELECT bank_code, account_number, available_balance
+FROM (
+    SELECT
+        bank_code,
+        account_number,
+        available_balance,
+        ROW_NUMBER() OVER (PARTITION BY bank_code ORDER BY available_balance DESC) as rn
+    FROM account
+) ranked
+WHERE rn = 1"""
     }
 ]
 
@@ -263,7 +297,7 @@ bank:
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
 - entity_id (VARCHAR): Entity/customer ID (UUID)
-- account_number (VARCHAR): Account number (SENSITIVE - do not expose)
+- account_number (VARCHAR): Account number - ENCRYPTED AT REST, cannot be searched/filtered by SQL
 - program_id (INTEGER): Program ID (0, 4, 21, 46, 99)
 - available_balance (DECIMAL): Current balance (can be negative/zero/extreme)
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
@@ -275,8 +309,8 @@ transaction:
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these values)
 - description (VARCHAR): Transaction description
 - transaction_amount (DECIMAL): Amount (can be 0.00, extreme values, etc.)
-- transaction_reference_id (VARCHAR): Reference/receipt number (often NULL, can be duplicated)
-- utr_number (VARCHAR): UTR (often NULL, encrypted, or plaintext)
+- transaction_reference_id (VARCHAR): Reference/receipt number, PLAINTEXT (often NULL, can be duplicated)
+- utr_number (VARCHAR): UTR - ENCRYPTED AT REST for most rows, cannot be searched/filtered by SQL
 
 Analyze this question about financial data:
 "{question}"

@@ -198,6 +198,75 @@ not just the topline percentages):
   infrastructure noise, not a pipeline characteristic, since later runs on a warm endpoint show
   consistent ~3-6s averages). Accepted per "accuracy first, speed second."
 
+## 4.5 Round 3: decrypting sensitive columns at runtime
+
+Per `TBX - Database Schema.md`, `account.account_number` and `transaction.utr_number` are
+sensitive and, in the real 20M-row database, will arrive encrypted - the app is expected to hold
+a decryption key and decrypt at read time with minimal added latency, while everything else
+(the SQL pipeline, self-consistency, repair, caching) keeps working unchanged.
+
+**Scheme: AES-256-GCM, one server-held key** (`backend/crypto_utils.py`). Not SHA-256 - a hash
+is one-way and can't decrypt anything; AES-256 is the actual reversible cipher, confirmed with
+the user before implementing. One key, loaded once from `ENCRYPTION_KEY` (env var), no
+per-request/per-user key handling - matches the problem statement's explicit "no production-grade
+auth/multi-tenant" scope. Each encrypted cell is a self-contained
+`base64(12-byte nonce || ciphertext+tag)` string, same shape as any other VARCHAR value.
+
+**Where decryption happens, and why there**: only in `query_execution_node`, on the final result
+set that's about to be returned - after the query has already run, never before or during
+filtering. This isn't just an implementation convenience: AES-GCM is non-deterministic (a random
+nonce every time a value is encrypted), so the same account number never produces the same
+ciphertext twice - a `WHERE`/`JOIN` can never match encrypted data no matter when you'd decrypt,
+and decrypting eagerly at load time would mean re-decrypting millions of rows nobody asked for.
+Two things keep this contract correct even when a query gets creative:
+- `sql_generation_node`'s self-consistency trial-executions vote on the *raw* (still-encrypted)
+  result signature, not decrypted values - the stored ciphertext is already a fixed, stable
+  per-row identifier (it isn't re-encrypted on every read), so voting on it works fine and one
+  fewer decrypt pass happens per candidate that doesn't win.
+- `crypto_utils.decrypt_row` matches column names by **substring**, not exact match - found
+  necessary while testing: a query that aggregates the column (`MAX(account_number) AS
+  max_account_number`) still needs decryption under its new alias, and a naive exact-name check
+  silently leaves the aliased value as raw ciphertext.
+
+**Keeping the LLM from generating an unsatisfiable filter**: `SQLValidator.
+_check_encrypted_column_usage` statically rejects any `WHERE`/`JOIN...ON` condition on
+`account_number`/`utr_number` other than `IS [NOT] NULL` (fast, no DB round-trip, clear
+repair-loop-friendly message), and the schema text in `prompts.py`/`benchmarks/run_benchmark.py`
+tells the model outright that these columns can't be searched and to ask for a different
+identifier instead (account_id, transaction_id, bank + date range). All 10 existing few-shot
+examples were re-verified against the new check (a couple already legitimately `GROUP BY`
+`account_number` alongside `account_id` - that's fine, harmless, and deliberately still allowed;
+only equality/JOIN matches are rejected).
+
+**Test data**: the sample CSVs had `account_number` in plaintext and `utr_number` as
+random-looking (but not actually decryptable) placeholder strings. `scripts/
+encrypt_sensitive_data.py` (dev-only, not part of the runtime) replaced both with real AES-256-GCM
+ciphertext across `data/`, `data/small/`, `data/large/`, so the decrypt path has something
+genuine to decrypt during testing - not part of any request-serving code path.
+
+**Tested with `scripts/test_decryption_queries.py`** (dev-only): five complex, multi-table
+questions that specifically require decrypting one or both sensitive columns, run through the
+real compiled pipeline against the live Qwen2.5-Coder-1.5B endpoint, on both the small and large
+(500K-transaction) datasets:
+- 4 of 5 questions decrypted correctly end to end, including a 3-table join returning both
+  `utr_number` and `account_number` together, an `IS NOT NULL` filter on an encrypted column, and
+  a `GROUP BY`/aggregate query that aliased the column (`max_account_number`) - confirming the
+  substring-match fix above actually matters in practice, not just in a unit test.
+- The 5th ("top account per bank by balance") failed on the *first* pass for a genuine, unrelated
+  reason: the model paired two independently-computed `MAX()` aggregates
+  (`MAX(available_balance)`, `MAX(account_number)`) in one `GROUP BY` - a classic SQL antipattern
+  that can silently mismatch which account each value actually came from. Fixed with a new
+  few-shot example demonstrating `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ... DESC)` +
+  `WHERE rn = 1` instead - re-tested afterward and it now produces the correctly-paired row every
+  time. Same category of fix as `complex_004` in round 2: a real analytical-SQL gap the few-shot
+  bank didn't cover yet, found by testing, not assumed.
+- **Decryption itself is not the latency bottleneck, by roughly three orders of magnitude.**
+  Directly measured (`backend/crypto_utils.decrypt_results`, isolated from any LLM/network call):
+  ~2.7-4.7 μs per row, ~0.3ms for 100K rows (the `SQLValidator` hard cap - the worst case that
+  could ever reach this code). End-to-end question latency was dominated entirely by LLM calls
+  (3-18s, matching round 2's self-consistency numbers) - decryption added an immeasurably small
+  fraction of that.
+
 ## 5. Architecture
 
 ```mermaid
@@ -213,7 +282,8 @@ flowchart TD
     EXEC -->|error, first try| REPAIR[sql_repair_node<br/>real DB error fed back,<br/>ONE retry, bounded]
     REPAIR -->|fixed| EXEC
     REPAIR -->|still broken| ANOM
-    EXEC -->|success| CACHESTORE[(store verified SQL<br/>in Redis)]
+    EXEC -->|success| DECRYPT[decrypt_results<br/>AES-256-GCM, result set only]
+    DECRYPT --> CACHESTORE[(store verified SQL<br/>in Redis)]
     CACHESTORE --> ANOM[anomaly_detection_node<br/>z-score + business rule + isolation forest]
     ANOM --> RESP[response_formatting_node<br/>confidence + grounding info]
     RESP --> EXPORT[export_node<br/>CSV]
@@ -247,6 +317,13 @@ what it needs on the day:
 - The verified-query cache (§3) becomes more valuable at this scale, not less: replaying a
   known-good query avoids re-running full-table-scan-shaped SQL a small model might generate on
   a retry.
+- **`ENCRYPTION_KEY` will need to be whatever key the hackathon organizers actually used to
+  encrypt the real 20M-row database (§4.5), not the demo key committed for our own sample data.**
+  If the real data uses a different cipher/format entirely, `crypto_utils.decrypt_value`'s
+  graceful fallback (return the value unchanged on any decrypt failure) means the app keeps
+  running and grounded, it just won't decrypt those two columns until the key/scheme is corrected
+  - it fails safe, not silently wrong. Decryption cost is not a scaling concern at this row count
+  either way (§4.5: ~0.3ms even at the 100K-row execution cap that bounds any single result set).
 
 ## 7. Progress tracker
 
@@ -286,6 +363,21 @@ aspirational state (Redis-backed sessions, Bedrock-only, "production-ready").
       after `QUERY_TIMEOUT_SECONDS`) — found necessary after a self-join hung for 938s/~15GB
       on 500K rows during benchmarking; both verified against that exact query
 - [x] Self-check tests: `backend/test_prompts.py`, `backend/test_sql_validator.py`
+- [x] AES-256-GCM decryption of `account_number`/`utr_number` at read time (`backend/
+      crypto_utils.py`), one server-held `ENCRYPTION_KEY`; static guard
+      (`SQLValidator._check_encrypted_column_usage`) blocks any WHERE/JOIN match on them (only
+      IS [NOT] NULL allowed); sample datasets re-encrypted with real ciphertext
+      (`scripts/encrypt_sensitive_data.py`) so the decrypt path has something genuine to decrypt
+- [x] Fixed a real gap found while testing: decryption matched sensitive columns by exact name,
+      so an aliased column (`MAX(account_number) AS max_account_number`) silently stayed
+      encrypted — now matched by substring
+- [x] Fixed a real correctness bug found while testing: the model paired two independent `MAX()`
+      aggregates (balance, account_number) in one `GROUP BY`, which can silently mismatch which
+      row each value came from — added a `ROW_NUMBER() OVER (PARTITION BY ...)` few-shot example
+      for "top-1-per-group" questions; re-tested and confirmed fixed
+- [x] Measured: decryption itself costs ~2.7-4.7 μs/row (~0.3ms at the 100K-row hard cap) -
+      not the latency bottleneck by roughly three orders of magnitude versus the LLM calls
+- [x] Self-check test: `backend/test_crypto_utils.py`
 
 **Pending**
 - [ ] MySQL adapter for the 20M-row hackathon database (blocked on credentials/schema access) —
