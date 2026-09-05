@@ -52,25 +52,34 @@ def normalize_question(question: str) -> str:
     return re.sub(r"\s+", " ", question.strip().lower())
 
 
-def get_cached_sql(question: str) -> Optional[str]:
-    """Look up SQL for a previously-asked, execution-verified equivalent question."""
+def _cache_key(question: str, entity_id: Optional[str] = None) -> str:
+    """entity_id is part of the key: SQL verified while scoped to one entity often has that
+    entity_id baked into the WHERE clause as a literal, so it must never be replayed for a
+    different entity (or no entity) - the post-execution entity filter in query_execution_node
+    would then just silently drop every row instead of showing the right entity's data."""
+    return f"verified_sql:{entity_id or '_all_'}:{normalize_question(question)}"
+
+
+def get_cached_sql(question: str, entity_id: Optional[str] = None) -> Optional[str]:
+    """Look up SQL for a previously-asked, execution-verified equivalent question (same entity
+    scope, if any)."""
     client = _get_client()
     if client is None:
         return None
     try:
-        return client.get(f"verified_sql:{normalize_question(question)}")
+        return client.get(_cache_key(question, entity_id))
     except Exception as e:
         logger.warning(f"Verified-query cache read failed: {e}")
         return None
 
 
-def store_verified_sql(question: str, sql: str) -> None:
+def store_verified_sql(question: str, sql: str, entity_id: Optional[str] = None) -> None:
     """Cache SQL for reuse. Only call this after the SQL has actually executed without error."""
     client = _get_client()
     if client is None:
         return
     try:
-        client.set(f"verified_sql:{normalize_question(question)}", sql)
+        client.set(_cache_key(question, entity_id), sql)
     except Exception as e:
         logger.warning(f"Verified-query cache write failed: {e}")
 

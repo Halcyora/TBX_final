@@ -5,7 +5,7 @@ TBX Schema: bank, account, transaction
 """
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # ============================================================================
 # SYSTEM PROMPT FOR SQL GENERATION
@@ -18,6 +18,22 @@ DATABASE SCHEMA (TBX Finance Assistant):
 bank:
 - bank_code (VARCHAR, PRIMARY KEY): Bank identifier code (e.g., HDFC, ICIC, SBIN, UTIB)
 - bank_name (VARCHAR): Canonical bank name in all-caps (e.g., HDFC BANK LIMITED)
+
+KNOWN bank_code -> bank_name MAPPING (do not invent a bank_code from an abbreviation; several
+codes do NOT match the common short name, e.g. State Bank of India / "SBI" is code SBIN, not
+"SBI"; Axis Bank is code UTIB, not "AXIS". Other banks may also exist beyond this list - if the
+user names one not below, filter with `UPPER(b.bank_name) LIKE UPPER('%<key part of name>%')`
+instead of guessing a code):
+- HDFC -> HDFC BANK LIMITED
+- ICIC -> ICICI BANK LIMITED
+- SBIN -> STATE BANK OF INDIA (user may say "SBI" or "State Bank")
+- UTIB -> AXIS BANK LIMITED (user may say "Axis")
+- KKBK -> KOTAK MAHINDRA BANK LIMITED (user may say "Kotak")
+- CNRB -> CANARA BANK
+- UBIN -> UNION BANK OF INDIA
+- AUBL -> AU SMALL FINANCE BANK LIMITED
+- TMBL -> TAMILNAD MERCANTILE BANK LIMITED
+- RATN -> RBL BANK LIMITED (user may say "RBL")
 
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
@@ -68,7 +84,17 @@ IMPORTANT RULES:
    rejected before it even runs. If the user wants to look up a record BY account number or
    UTR, that isn't possible via SQL on encrypted columns - ask for a different identifier
    instead (account_id, transaction_id, bank + date range).
-9. Always think step-by-step before writing SQL.
+9. Never copy a literal value (account numbers, IDs, bank codes, dates, amounts) from the few-shot
+   examples below into your query - they only demonstrate SQL structure/patterns. Only use filter
+   values that literally appear in the CURRENT question. If the question names a bank but no
+   specific account, filter on bank_code/bank_name only - do not add an account/date filter that
+   wasn't mentioned.
+10. Wrap SUM()/AVG() in COALESCE(..., 0) - e.g. COALESCE(SUM(transaction_amount), 0) - so a filter
+    that matches zero rows returns 0, not NULL/blank.
+11. "Sum"/"total" only applies to a numeric money column (available_balance, transaction_amount).
+    "Sum of accounts", "total accounts", "how many accounts" etc. means counting rows/entities -
+    use COUNT(*), never SUM(), when the thing being counted isn't itself a money amount.
+12. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -266,6 +292,32 @@ FROM (
     FROM account
 ) ranked
 WHERE rn = 1"""
+    },
+    {
+        "question": "What is the total available balance for HDFC accounts?",
+        "reasoning": (
+            "The question names a bank (HDFC) but no specific account, so filter on bank_code "
+            "only - do not add an account filter. 'Total' means SUM(), not a bare column "
+            "selection. Wrap in COALESCE so a zero-match filter returns 0, not NULL."
+        ),
+        "sql": """SELECT
+    COALESCE(SUM(a.available_balance), 0) as total_available_balance
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE b.bank_code = 'HDFC'"""
+    },
+    {
+        "question": "What is the sum of accounts for SBI?",
+        "reasoning": (
+            "'Sum of accounts' means counting how many account rows exist, not summing a money "
+            "column - accounts don't have a 'sum' value. 'SBI' maps to bank_code SBIN per the "
+            "known bank mapping (not 'SBI'). Use COUNT(*), not SUM()."
+        ),
+        "sql": """SELECT
+    COUNT(*) as total_accounts
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE b.bank_code = 'SBIN'"""
     }
 ]
 
@@ -282,13 +334,16 @@ Database error:
 {error}
 
 Fix the query so it runs successfully and still answers the original question: "{question}"
+Common causes: a bank_code that isn't one of HDFC, ICIC, SBIN, UTIB, KKBK, CNRB, UBIN, AUBL,
+TMBL, RATN (e.g. "SBI" should be "SBIN", "AXIS" should be "UTIB"); a non-aggregated column
+missing from GROUP BY; SUM()/AVG() not wrapped in COALESCE(..., 0); or a wrong table alias.
 
 Return ONLY the corrected SQL query, nothing else. No markdown, no explanation."""
 
 # ============================================================================
 # CLASSIFICATION PROMPT (Determine query type and confidence)
 # ============================================================================
-CLASSIFICATION_PROMPT = """{history_context}DATABASE SCHEMA (TBX Finance Assistant - for reference only, do not write SQL here):
+CLASSIFICATION_PROMPT = """{history_context}{entity_context}DATABASE SCHEMA (TBX Finance Assistant - for reference only, do not write SQL here):
 
 bank:
 - bank_code (VARCHAR, PRIMARY KEY): Bank code (e.g., HDFC, ICIC, SBIN, UTIB)
@@ -439,8 +494,22 @@ def _select_examples(user_question: str, k: int = 5) -> List[Dict[str, str]]:
     return [ex for _, _, ex in scored[:k]]
 
 
-def build_few_shot_prompt(user_question: str, history_context: str = "") -> str:
-    """Build few-shot prompt with the most relevant examples, optionally grounded in prior turns"""
+def _entity_scope_note(entity_id: Optional[str]) -> str:
+    """A user-selected entity_id locks the conversation to that customer's accounts - pronouns
+    like 'its'/'their'/'this account' then refer to it without asking for clarification."""
+    if not entity_id:
+        return ""
+    return (
+        f"The user has selected entity_id = '{entity_id}' in the UI. Treat pronouns like "
+        f"'its'/'their'/'this account' as referring to accounts owned by this entity, and do "
+        f"not ask for clarification on which account/entity - use entity_id = '{entity_id}' "
+        f"instead.\n\n"
+    )
+
+
+def build_few_shot_prompt(user_question: str, history_context: str = "", entity_id: Optional[str] = None) -> str:
+    """Build few-shot prompt with the most relevant examples, optionally grounded in prior turns
+    and scoped to one entity_id (locked in the UI)."""
     examples_text = ""
     for i, example in enumerate(_select_examples(user_question), 1):
         examples_text += f"""
@@ -453,7 +522,7 @@ SQL: {example['sql']}
 
     return f"""{SQL_GENERATION_SYSTEM_PROMPT}
 
-{history_context}{examples_text}
+{_entity_scope_note(entity_id)}{history_context}{examples_text}
 
 Now, for this question:
 {user_question}
@@ -464,9 +533,13 @@ def build_repair_prompt(sql: str, error: str, question: str) -> str:
     """Build the execution-feedback repair prompt: feed the real DB error back to the model"""
     return SQL_REPAIR_PROMPT_TEMPLATE.format(sql=sql, error=error, question=question)
 
-def build_classification_prompt(user_question: str, history_context: str = "") -> str:
-    """Build the query classification prompt, optionally grounded in prior conversation turns"""
-    return CLASSIFICATION_PROMPT.format(question=user_question, history_context=history_context)
+def build_classification_prompt(user_question: str, history_context: str = "", entity_id: Optional[str] = None) -> str:
+    """Build the query classification prompt, optionally grounded in prior conversation turns
+    and scoped to one entity_id (locked in the UI)."""
+    return CLASSIFICATION_PROMPT.format(
+        question=user_question, history_context=history_context,
+        entity_context=_entity_scope_note(entity_id),
+    )
 
 def build_response_prompt(question: str, results: str, confidence: float, 
                          anomalies: str = "") -> str:

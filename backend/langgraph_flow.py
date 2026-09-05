@@ -135,7 +135,8 @@ class FinanceAssistantState(BaseModel):
     """State for the LangGraph"""
     user_query: str
     conversation_history: List[Dict[str, Any]] = []
-    
+    entity_id: Optional[str] = None  # Restricts results to a single entity, if selected in the UI
+
     # Parsing stage
     intent: Optional[str] = None
     entities: Dict[str, Any] = {}
@@ -187,7 +188,7 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
     
     try:
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
-        prompt = build_classification_prompt(state.user_query, history_context)
+        prompt = build_classification_prompt(state.user_query, history_context, entity_id=state.entity_id)
 
         response_text = await asyncio.to_thread(
             call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1,
@@ -293,7 +294,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         logger.info("Skipping SQL generation due to clarification needed")
         return state
 
-    cached_sql = get_cached_sql(state.user_query)
+    cached_sql = get_cached_sql(state.user_query, entity_id=state.entity_id)
     if cached_sql:
         state.sql_query = cached_sql
         state.cache_hit = True
@@ -304,7 +305,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
 
     try:
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
-        few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
+        few_shot_prompt = build_few_shot_prompt(state.user_query, history_context, entity_id=state.entity_id)
         n_samples = max(1, int(os.getenv("SQL_SELF_CONSISTENCY_N", "3")))
 
         if n_samples <= 1:
@@ -441,6 +442,11 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         
         if success:
             rows = result if isinstance(result, list) else [result]
+            # Defense-in-depth: if an entity filter is active, drop any row tagged with a
+            # different entity_id before it ever reaches decryption/the user - a backstop for
+            # the (rare) case the LLM's SQL didn't filter by entity_id itself.
+            if state.entity_id and rows and "entity_id" in rows[0]:
+                rows = [row for row in rows if row.get("entity_id") == state.entity_id]
             # Decrypt sensitive columns (account_number, utr_number) here, on the final,
             # already-small result set that's about to be shown/exported - never eagerly, and
             # never before/during filtering (ciphertext can't be filtered on anyway; see
@@ -455,7 +461,7 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
             logger.info(f"Query execution successful, {len(state.query_results)} rows returned")
             # Cache only SQL that has actually executed without error - never a failed or
             # repaired-but-unverified query.
-            store_verified_sql(state.user_query, state.sql_query)
+            store_verified_sql(state.user_query, state.sql_query, entity_id=state.entity_id)
         else:
             state.execution_error = str(result)
             logger.error(f"Query execution failed: {result}")

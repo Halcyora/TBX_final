@@ -54,6 +54,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: ChatMessage
     model: str = "qwen2.5-coder-1.5b"
+    entity_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     session_id: str
@@ -430,7 +431,8 @@ async def chat(request: ChatRequest):
         # Initialize state
         state = FinanceAssistantState(
             user_query=request.message.content,
-            model_used=request.model
+            model_used=request.model,
+            entity_id=request.entity_id
         )
         
         # Get conversation context
@@ -689,6 +691,17 @@ async def switch_dataset(request: DatasetSwitchRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Dataset switch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/entities", response_model=List[str])
+async def list_entities():
+    """Get distinct entity_ids for the entity-filter dropdown in the chat UI"""
+    try:
+        db = get_db()
+        rows = db.execute_query("SELECT DISTINCT entity_id FROM account ORDER BY entity_id")
+        return [row["entity_id"] for row in rows if row.get("entity_id")]
+    except Exception as e:
+        logger.error(f"Entities endpoint error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/schema")
