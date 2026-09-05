@@ -35,6 +35,11 @@ instead of guessing a code):
 - TMBL -> TAMILNAD MERCANTILE BANK LIMITED
 - RATN -> RBL BANK LIMITED (user may say "RBL")
 
+This mapping is REFERENCE ONLY for resolving a name to its code - when the question names exactly
+ONE bank, filter with a single `bank_code = '<code>'`. Never paste the whole mapping into a
+`bank_code IN (...)` list; only include multiple codes if the question explicitly names multiple
+banks or asks for "all banks".
+
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)

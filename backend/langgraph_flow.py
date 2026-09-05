@@ -114,6 +114,10 @@ def _call_openai_compatible(prompt: str, system: Optional[str],
         body["response_format"] = response_format
 
     response = httpx.post(f"{base_url}/chat/completions", json=body, timeout=60.0)
+    if response.status_code >= 400:
+        # Surface the server's actual error body (e.g. context-length exceeded) instead of just
+        # the generic status code, so failures are diagnosable from the logs.
+        logger.warning(f"LLM endpoint returned {response.status_code}: {response.text[:500]}")
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
@@ -191,7 +195,9 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         prompt = build_classification_prompt(state.user_query, history_context, entity_id=state.entity_id)
 
         response_text = await asyncio.to_thread(
-            call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1,
+            # The deployed model's context window is 4096 tokens total (prompt + completion) -
+            # keep max_tokens modest so a longer conversation history never risks overflowing it.
+            call_llm, prompt, model_alias=state.model_used, max_tokens=400, temperature=0.1,
             response_format=CLASSIFICATION_JSON_SCHEMA,
         )
 
@@ -310,8 +316,11 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
 
         if n_samples <= 1:
             # Self-consistency disabled: single low-temperature shot, unchanged from before.
+            # max_tokens kept modest - the few-shot prompt alone runs ~2300+ tokens against this
+            # model's 4096-token context window, and a SQL query rarely needs more than a few
+            # hundred completion tokens anyway.
             sql_text = _strip_sql_markdown(await asyncio.to_thread(
-                call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+                call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.1
             ))
             state.sql_query = sql_text
             first_line = sql_text.strip().splitlines()[0] if sql_text.strip() else ""
@@ -325,7 +334,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
             raw_candidates = await asyncio.gather(*[
                 asyncio.to_thread(
                     call_llm, few_shot_prompt, model_alias=state.model_used,
-                    max_tokens=1024, temperature=0.4
+                    max_tokens=512, temperature=0.4
                 )
                 for _ in range(n_samples)
             ])
@@ -407,7 +416,7 @@ async def sql_repair_node(state: FinanceAssistantState) -> FinanceAssistantState
     try:
         repair_prompt = build_repair_prompt(state.sql_query, state.execution_error, state.user_query)
         repaired_sql = _strip_sql_markdown(await asyncio.to_thread(
-            call_llm, repair_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.0
+            call_llm, repair_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.0
         ))
 
         is_valid, validation_msg = SQLValidator.validate_query(repaired_sql)
