@@ -41,20 +41,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_ALIAS = "qwen-1.5b"  # vLLM-hosted Qwen 1.5B - PS-compliant
 
-# Bedrock model aliases for benchmarking
+# Bedrock fallback (used only if vLLM is unavailable/fails)
 _MODEL_ALIAS_ENV_KEYS = {
     "qwen-1.5b": "QWEN_MODEL_ID",
-    "amazon.nova-micro": "NOVA_MICRO_MODEL_ID",
-    "llama3-1-8b": "LLAMA_8B_MODEL_ID",
-    "mistral-7b": "MISTRAL_7B_MODEL_ID",
-    "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
 }
 _MODEL_ALIAS_DEFAULTS = {
     "qwen-1.5b": "amazon.nova-micro-v1:0",  # Bedrock fallback ID used only if vLLM is unavailable/fails
-    "amazon.nova-micro": "amazon.nova-micro-v1:0",
-    "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
-    "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
-    "llama4-scout-17b": "meta.llama4-scout-17b-instruct-v1:0",
 }
 
 _bedrock_client = None
@@ -99,9 +91,8 @@ def _call_vllm(prompt: str, system: Optional[str], max_tokens: int, temperature:
 
 
 def _resolve_model_id(model_alias: str) -> str:
-    alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "amazon.nova-micro"
-    env_key = _MODEL_ALIAS_ENV_KEYS[alias]
-    return os.getenv(env_key, _MODEL_ALIAS_DEFAULTS[alias])
+    """Resolve the Bedrock model ID for the given alias"""
+    return os.getenv("QWEN_MODEL_ID", _MODEL_ALIAS_DEFAULTS["qwen-1.5b"])
 
 
 def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,

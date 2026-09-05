@@ -11,12 +11,16 @@ SQL_GENERATION_SYSTEM_PROMPT = """You are an expert SQL developer for TBX financ
 Your job is to convert natural language questions into precise SQL queries.
 
 DATABASE SCHEMA (TBX Finance Assistant):
+EXACT TABLE NAMES (use these EXACTLY as shown - singular, lowercase):
+- bank (NOT "banks")
+- account (NOT "accounts")
+- transaction (NOT "transactions" - this is SINGULAR)
 
-bank:
+bank table:
 - bank_code (VARCHAR, PRIMARY KEY): Bank identifier code (e.g., HDFC, ICIC, SBIN, UTIB)
 - bank_name (VARCHAR): Canonical bank name in all-caps (e.g., HDFC BANK LIMITED)
 
-account:
+account table:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
 - account_number (VARCHAR): Account number (SENSITIVE - encrypted in database, masked in display)
@@ -24,7 +28,7 @@ account:
 - available_balance (VARCHAR): Account balance (can be negative, zero, or extreme values)
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
 
-transaction:
+transaction table (SINGULAR - NOT "transactions"):
 - transaction_id (VARCHAR, PRIMARY KEY): Unique transaction identifier (UUID)
 - account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
 - transaction_date (VARCHAR): Transaction timestamp in ISO 8601 format (YYYY-MM-DDTHH:MM:SS.microseconds). 
@@ -35,6 +39,12 @@ transaction:
 - transaction_amount (VARCHAR): Amount (can be 0.00, micro amounts, or extreme values)
 - transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
 - utr_number (VARCHAR): Unique Transaction Reference (often empty, encrypted, or plaintext)
+
+CRITICAL TABLE NAME RULES:
+1. The correct table name is "transaction" (SINGULAR). NEVER use "transactions" (plural).
+2. Use FROM transaction, JOIN transaction, not FROM transactions or JOIN transactions
+3. When the user asks "show me transactions" or "list all transactions", still use FROM transaction (singular)
+4. When querying for transaction data, always use: FROM transaction (singular table name)
 
 IMPORTANT RULES:
 1. Add a DATE FILTER only when the user's question explicitly mentions a time period (last month, Q3, 2026, etc).
@@ -47,14 +57,14 @@ IMPORTANT RULES:
    - To get bank names: JOIN bank ON account.bank_code = bank.bank_code
    - To get account details: JOIN account ON transaction.account_id = account.account_id
    - Never JOIN unnecessarily - keep queries simple.
-3. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
-4. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
-5. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
-6. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
-7. Return meaningful column names using AS aliases
-8. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
-9. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
-10. Always think step-by-step before writing SQL.
+4. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
+5. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
+6. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
+7. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
+8. Return meaningful column names using AS aliases
+9. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
+10. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
+11. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -65,7 +75,7 @@ Return ONLY the SQL query, nothing else. No markdown, no explanation."""
 SQL_EXAMPLES = [
     {
         "question": "What is the total amount of transactions from HDFC Bank?",
-        "reasoning": "Need to: 1) JOIN account with bank to get bank names, 2) Filter by HDFC, 3) Sum transaction amounts",
+        "reasoning": "Need to: 1) JOIN account with bank to get bank names, 2) JOIN transaction (singular table!) to get transaction data, 3) Filter by HDFC, 4) Sum transaction amounts",
         "sql": """SELECT 
     b.bank_code,
     b.bank_name,
@@ -76,6 +86,19 @@ JOIN bank b ON a.bank_code = b.bank_code
 JOIN transaction t ON a.account_id = t.account_id
 WHERE b.bank_code = 'HDFC'
 GROUP BY b.bank_code, b.bank_name"""
+    },
+    {
+        "question": "Show me all transactions",
+        "reasoning": "User asks for 'transactions' (plural) but the table name is 'transaction' (singular). Always use FROM transaction, not FROM transactions",
+        "sql": """SELECT 
+    t.transaction_id,
+    t.account_id,
+    t.transaction_date,
+    t.transaction_type,
+    CAST(t.transaction_amount AS DECIMAL) as amount,
+    t.description
+FROM transaction t
+LIMIT 100"""
     },
     {
         "question": "Show me accounts with negative balances",
@@ -102,7 +125,7 @@ LIMIT 1"""
     },
     {
         "question": "How many credit vs debit transactions are there?",
-        "reasoning": "Need to: 1) Group by transaction_type, 2) Count transactions, 3) Sum amounts for each type",
+        "reasoning": "Need to: 1) Query from transaction table (SINGULAR), 2) Group by transaction_type, 3) Count and sum by type",
         "sql": """SELECT 
     t.transaction_type,
     COUNT(t.transaction_id) as transaction_count,
@@ -112,8 +135,15 @@ FROM transaction t
 GROUP BY t.transaction_type"""
     },
     {
+        "question": "Show me total transactions count",
+        "reasoning": "User asks for 'transactions' but table is 'transaction' (singular). Use FROM transaction, not FROM transactions",
+        "sql": """SELECT 
+    COUNT(*) as total_transactions
+FROM transaction"""
+    },
+    {
         "question": "Which accounts have zero available balance?",
-        "reasoning": "Need to: 1) Filter accounts where available_balance = '0.00', 2) Get associated transactions, 3) Show account details",
+        "reasoning": "Need to: 1) Filter accounts where available_balance = '0.00', 2) Get associated transactions from transaction table, 3) Show account details",
         "sql": """SELECT 
     a.account_id,
     a.account_number,
@@ -128,7 +158,7 @@ GROUP BY a.account_id, a.account_number, a.program_id, b.bank_name"""
     },
     {
         "question": "Show transactions with missing UTR or reference ID",
-        "reasoning": "Need to: 1) Filter transactions where utr_number is empty OR transaction_reference_id is empty, 2) Get account/bank info, 3) Count how many",
+        "reasoning": "Need to: 1) Query from transaction table (SINGULAR), 2) Filter where utr_number is empty OR transaction_reference_id is empty, 3) Count how many",
         "sql": """SELECT 
     t.transaction_id,
     t.account_id,
@@ -144,7 +174,7 @@ LIMIT 20"""
     },
     {
         "question": "What is the average transaction amount by account?",
-        "reasoning": "Need to: 1) Group by account, 2) Calculate average amount, 3) Join to get bank/account details, 4) Order by average",
+        "reasoning": "Need to: 1) Query from transaction table (SINGULAR), 2) Group by account, 3) Calculate average amount, 4) Join to get bank/account details, 5) Order by average",
         "sql": """SELECT 
     a.account_id,
     a.account_number,
@@ -161,7 +191,7 @@ ORDER BY avg_amount DESC"""
     },
     {
         "question": "What is the most common transaction date?",
-        "reasoning": "The user asks about 'transaction date' without specifying time. transaction_date contains full ISO datetime (YYYY-MM-DDTHH:MM:SS.microseconds). Extract DATE only using CAST(transaction_date AS DATE). Group by date and count to find most common.",
+        "reasoning": "The user asks about 'transaction date' without specifying time. transaction_date contains full ISO datetime. Extract DATE only using CAST(transaction_date AS DATE). Query from transaction (SINGULAR table)",
         "sql": """SELECT 
     CAST(transaction_date AS DATE) as transaction_date,
     COUNT(transaction_id) as transaction_count
@@ -177,12 +207,20 @@ LIMIT 10"""
 # ============================================================================
 COT_PROMPT_TEMPLATE = """Question: {question}
 
+IMPORTANT: The tables are named: bank, account, transaction (all SINGULAR - NOT plural)
+
 Think step-by-step:
-1. What data do we need? (Which tables?)
+1. What data do we need? (Which tables? Remember: bank, account, transaction - all singular)
 2. What filters apply? (vendor, status - only add a date range if a time period is explicitly mentioned)
 3. What calculations? (SUM, COUNT, AVG?)
 4. How to join tables? (if needed)
 5. What order/limit? (sorting, top results?)
+
+CRITICAL REMINDER:
+- Use FROM transaction (NOT FROM transactions)
+- Use FROM account (NOT FROM accounts) 
+- Use FROM bank (NOT FROM banks)
+- Always use singular table names in all JOINs and WHERE clauses
 
 Now write the SQL query based on this reasoning:"""
 
@@ -276,16 +314,23 @@ SQL_VALIDATION_PROMPT = """Review this SQL query for correctness:
 
 {sql}
 
-Check:
-1. Syntax: Valid SQL?
-2. Schema: All tables/columns exist?
-3. Logic: Answers the question correctly?
-4. Performance: Reasonable query structure?
+CRITICAL TABLE NAMES (must be singular):
+- transaction (NOT transactions)
+- account (NOT accounts)
+- bank (NOT banks)
 
-If there are issues, fix them and return corrected SQL.
+Check:
+1. Table Names: All table names are SINGULAR (transaction, account, bank)? 
+   - REJECT if using "transactions", "accounts", or "banks" (plural)
+2. Syntax: Valid SQL?
+3. Schema: All tables/columns exist?
+4. Logic: Answers the question correctly?
+5. Performance: Reasonable query structure?
+
+If there are issues (especially pluralized table names), fix them and return corrected SQL.
 If query is correct, return it as-is.
 
-Return ONLY the SQL query (corrected if needed), nothing else."""
+Return ONLY the SQL query (corrected if needed), nothing else. No markdown, no explanation."""
 
 # ============================================================================
 # ANOMALY EXPLANATION PROMPT
