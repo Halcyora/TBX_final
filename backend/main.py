@@ -132,7 +132,7 @@ class SessionManager:
         try:
             os.makedirs(os.path.dirname(SESSION_STORE_PATH) or ".", exist_ok=True)
             with open(SESSION_STORE_PATH, "w") as f:
-                json.dump(self._sessions, f)
+                json.dump(self._sessions, f, default=str)
         except Exception as e:
             logger.error(f"Failed to persist session store: {e}")
     
@@ -611,7 +611,7 @@ def get_dataset_autocomplete_context(user_query: str) -> Dict[str, List[str]]:
 @app.post("/api/autocomplete", response_model=AutocompleteResponse)
 async def autocomplete(request: AutocompleteRequest):
     """Generate sentence autocomplete suggestions grounded in financial dataset context
-    using HuggingFace Qwen 1.5B (or AWS Bedrock fallback)"""
+    using self-hosted vLLM Qwen 1.5B (or AWS Bedrock fallback)"""
     query = request.query.strip()
     if not query or len(query) < 2:
         return AutocompleteResponse(suggestions=[])

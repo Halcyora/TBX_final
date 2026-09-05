@@ -5,7 +5,6 @@ langgraph==0.0.39
 langchain-core==0.1.22
 langchain-community==0.0.13
 boto3>=1.40.0
-huggingface_hub>=0.25.0
 # redis==5.0.0  # only needed for the production Redis-backed SessionManager, see PRODUCTION.md
 duckdb==0.9.2
 pydantic==2.4.2

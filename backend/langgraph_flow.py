@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 import boto3
-from huggingface_hub import InferenceClient
+import httpx
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 # LLM CLIENT
 #
 # Qwen 1.5B: Optimized for financial queries
-# Prefers HuggingFace Inference API when HUGGINGFACE_API_KEY set
-# Falls back to AWS Bedrock if needed
+# Prefers a self-hosted vLLM endpoint (OpenAI-compatible) when VLLM_ENDPOINT_URL
+# is set. Falls back to AWS Bedrock if needed.
 # Fully compliant with Problem Statement Section 7 hard constraint (<=20B params)
 # ============================================================================
 
-DEFAULT_MODEL_ALIAS = "qwen-1.5b"  # HuggingFace Qwen 1.5B - PS-compliant
+DEFAULT_MODEL_ALIAS = "qwen-1.5b"  # vLLM-hosted Qwen 1.5B - PS-compliant
 
 # Bedrock model aliases for benchmarking
 _MODEL_ALIAS_ENV_KEYS = {
@@ -50,7 +50,7 @@ _MODEL_ALIAS_ENV_KEYS = {
     "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
 }
 _MODEL_ALIAS_DEFAULTS = {
-    "qwen-1.5b": "qwen-1.5b",  # Uses HuggingFace when HUGGINGFACE_API_KEY set
+    "qwen-1.5b": "amazon.nova-micro-v1:0",  # Bedrock fallback ID used only if vLLM is unavailable/fails
     "amazon.nova-micro": "amazon.nova-micro-v1:0",
     "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
     "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
@@ -58,11 +58,9 @@ _MODEL_ALIAS_DEFAULTS = {
 }
 
 _bedrock_client = None
-_hf_client = None
 
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
-# This model is only served by the featherless-ai partner provider on HF's router
-HF_PROVIDER = os.getenv("HF_PROVIDER", "featherless-ai")
+VLLM_ENDPOINT_URL = os.getenv("VLLM_ENDPOINT_URL", "https://vllm-qwen-2wv6ilt7fa-uc.a.run.app/v1/chat/completions")
+VLLM_MODEL_ID = os.getenv("VLLM_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
 
 
 def _get_bedrock_client():
@@ -77,25 +75,27 @@ def _get_bedrock_client():
     return _bedrock_client
 
 
-def _get_hf_client() -> Optional[InferenceClient]:
-    """Lazily build a Hugging Face Inference client if an API key is configured"""
-    global _hf_client
-    token = os.getenv("HUGGINGFACE_API_KEY")
-    if not token:
-        return None
-    if _hf_client is None:
-        _hf_client = InferenceClient(model=HF_MODEL_ID, token=token, provider=HF_PROVIDER)
-    return _hf_client
-
-
-def _call_hf(prompt: str, system: Optional[str], max_tokens: int, temperature: float) -> str:
-    client = _get_hf_client()
+def _call_vllm(prompt: str, system: Optional[str], max_tokens: int, temperature: float) -> str:
+    """Call the self-hosted vLLM OpenAI-compatible chat completions endpoint"""
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    response = client.chat_completion(messages=messages, max_tokens=max_tokens, temperature=temperature)
-    return response.choices[0].message.content
+
+    response = httpx.post(
+        VLLM_ENDPOINT_URL,
+        json={
+            "model": VLLM_MODEL_ID,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+        headers={"Content-Type": "application/json"},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
 
 
 def _resolve_model_id(model_alias: str) -> str:
@@ -108,14 +108,19 @@ def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Option
              max_tokens: int = 1024, temperature: float = 0.2) -> str:
     """Call the configured LLM and return its text response.
 
-    Prefers the Hugging Face Inference API (Qwen2.5-Coder-1.5B-Instruct) when
-    HUGGINGFACE_API_KEY is set, falling back to AWS Bedrock otherwise/on error.
+    Prefers the self-hosted vLLM endpoint (Qwen2.5-Coder-1.5B-Instruct) when
+    VLLM_ENDPOINT_URL is reachable, falling back to AWS Bedrock otherwise/on error.
+    Retries the vLLM call once on transient failures (timeouts, cold starts, etc.)
+    before falling back.
     """
-    if _get_hf_client() is not None:
+    last_error: Optional[Exception] = None
+    for attempt in range(2):
         try:
-            return _call_hf(prompt, system, max_tokens, temperature)
+            return _call_vllm(prompt, system, max_tokens, temperature)
         except Exception as e:
-            logger.warning(f"Hugging Face inference failed, falling back to Bedrock: {e}")
+            last_error = e
+            logger.warning(f"vLLM inference attempt {attempt + 1} failed: {e}")
+    logger.warning(f"vLLM inference failed after retries, falling back to Bedrock: {last_error}")
 
     model_id = _resolve_model_id(model_alias)
     client = _get_bedrock_client()
@@ -269,14 +274,13 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
     """
     Generate SQL query using few-shot + chain-of-thought
     """
-    logger.info(f"SQL generation node called: user_query={state.user_query[:50]}")
+    logger.info("Generating SQL query")
     
     if state.needs_clarification:
         logger.info("Skipping SQL generation due to clarification needed")
         return state
     
     try:
-        logger.info("Calling LLM for chain-of-thought reasoning")
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
 
         # First, build CoT prompt
@@ -287,7 +291,6 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
             call_llm, cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2
         )
         logger.debug(f"Chain-of-thought: {cot_text[:200]}")
-        logger.info("CoT reasoning complete, now generating SQL with few-shot examples")
         
         # Now generate SQL with few-shot examples
         few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
@@ -310,7 +313,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         logger.info(f"SQL generated: {sql_text[:100]}...")
         
     except Exception as e:
-        logger.error(f"SQL generation error: {e}")
+        logger.error(f"SQL generation error: {e}", exc_info=True)
         state.execution_error = f"SQL generation failed: {str(e)}"
     
     return state
@@ -580,11 +583,8 @@ async def export_node(state: FinanceAssistantState) -> FinanceAssistantState:
 
 def route_clarification(state: FinanceAssistantState) -> str:
     """Route based on clarification needs"""
-    logger.info(f"route_clarification: confidence={state.confidence_score}, needs_clarification={state.needs_clarification}")
     if state.needs_clarification:
-        logger.info("Routing to clarification node")
         return "clarification"
-    logger.info("Routing to sql_generation node")
     return "sql_generation"
 
 
