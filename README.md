@@ -102,12 +102,49 @@ tbx_finance_assistant/
 
 ## Setup Instructions
 
+### Setup Flow Diagram
+
+```mermaid
+flowchart LR
+    A["Clone & Navigate"] --> B["Copy .env.example<br/>→ .env"]
+    B --> C["Add AWS<br/>Credentials"]
+    C --> D["Install Backend<br/>python -m venv venv<br/>pip install -r requirements.txt"]
+    D --> E["Run Backend<br/>python main.py<br/>:8000"]
+    C --> F["Install Frontend<br/>npm install"]
+    F --> G["Run Frontend<br/>npm run dev<br/>:3000"]
+    E --> H{Both Running?}
+    G --> H
+    H -->|Yes| I["✅ Visit http://localhost:3000"]
+    style D fill:#e1f5ff
+    style F fill:#f3e5f5
+    style I fill:#c8e6c9
+```
+
 ### Prerequisites
 - Python 3.10+, Node.js 18+
 - AWS Account (Bedrock)
 - MySQL optional
 
 ### Quick Start
+
+```mermaid
+flowchart LR
+    A["Clone Repo"] --> B["Copy .env.example<br/>→ .env"]
+    B --> C["Add AWS<br/>Credentials"]
+    C --> D["Backend Setup"]
+    D --> D1["python -m venv venv"]
+    D1 --> D2["pip install<br/>-r requirements.txt"]
+    D2 --> D3["python main.py<br/>:8000"]
+    C --> E["Frontend Setup"]
+    E --> E1["npm install"]
+    E1 --> E2["npm run dev<br/>:3000"]
+    D3 --> F{"Ready?"}
+    E2 --> F
+    F -->|Yes| G["✅ Visit http://localhost:3000"]
+    style D fill:#e1f5ff
+    style E fill:#f3e5f5
+    style G fill:#c8e6c9
+```
 
 **Backend:**
 ```bash
@@ -131,20 +168,6 @@ npm run dev  # Runs on http://localhost:3000
 3. Encryption auto-configured with ENCRYPTION_KEY & DECRYPTION_CODES
 
 See [DOCS.md](DOCS.md) for detailed setup by role
-# Server available at http://localhost:8000
-```
-
-### 4. Frontend Setup
-
-```bash
-# Install dependencies
-cd ../frontend
-npm install
-
-# Start Next.js dev server
-npm run dev
-# UI available at http://localhost:3000
-```
 
 ### 5. Database Initialization
 
@@ -334,25 +357,44 @@ The benchmark suite compares Nova Micro against alternative compliant models (Ll
 ## Grounding & Accuracy
 
 ### Grounding Checks
-✅ Verify all numbers from query results  
-✅ Check SQL against database schema  
-✅ Flag if data missing/null  
-✅ Validate date range constraints  
-✅ Prevent fabricated figures  
 
-### Confidence Scoring (Composite)
-```python
-confidence = (
-    query_clarity * 0.4 +       # How unambiguous was the question?
-    data_completeness * 0.3 +   # How much data was available?
-    result_reliability * 0.3    # How confident in results?
-)
+```mermaid
+flowchart TD
+    A["User Query"] --> B["SQL Generation"]
+    B --> C["Verify against<br/>Schema"]
+    C --> D{"Schema<br/>Valid?"}
+    D -->|No| E["❌ Reject Query"]
+    D -->|Yes| F["Execute SQL"]
+    F --> G{"Results<br/>Found?"}
+    G -->|No| H["Flag: No Data"]
+    G -->|Yes| I["Verify Numbers"]
+    I --> J{"Data<br/>Consistent?"}
+    J -->|No| K["Flag: Anomaly"]
+    J -->|Yes| L["✅ Grounded Result"]
+    E --> M["Return Error"]
+    H --> M
+    K --> M
+    L --> N["Add to Response"]
+    style L fill:#c8e6c9
+    style E fill:#ffcdd2
+    style M fill:#ffe0b2
 ```
 
-Levels:
-- 🟢 High (>80%): Answer with confidence
-- 🟡 Medium (60-80%): Answer with caveats
-- 🔴 Low (<60%): Ask clarifying questions
+### Confidence Scoring (Composite)
+
+```mermaid
+flowchart LR
+    A["Clarity<br/>40%"] --> B["Aggregate<br/>Score"]
+    C["Completeness<br/>30%"] --> B
+    D["Reliability<br/>30%"] --> B
+    B --> E{"Score<br/>Level?"}
+    E -->|>80%| F["🟢 High<br/>Answer with<br/>Confidence"]
+    E -->|60-80%| G["🟡 Medium<br/>Answer with<br/>Caveats"]
+    E -->|<60%| H["🔴 Low<br/>Ask for<br/>Clarification"]
+    style F fill:#c8e6c9
+    style G fill:#fff9c4
+    style H fill:#ffcdd2
+```
 
 ## Bonus Features
 

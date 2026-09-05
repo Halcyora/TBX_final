@@ -39,6 +39,30 @@ frontend/
 
 ## Setup
 
+### User Journey & Setup Flow
+
+```mermaid
+flowchart TD
+    A["User Visits<br/>localhost:3000"]
+    A --> B["Load<br/>ChatInterface"]
+    B --> C["Display<br/>Welcome +<br/>Example Queries"]
+    C --> D["User Asks<br/>Question"]
+    D --> E["API Call<br/>/chat"]
+    E --> F["Backend<br/>Processes"]
+    F --> G["Returns<br/>Answer +<br/>Metadata"]
+    G --> H["Display<br/>Results"]
+    H --> I["Show<br/>SQL &<br/>Anomalies"]
+    I --> J{User<br/>Satisfied?}
+    J -->|Yes| K["✅ Export/Next Query"]
+    J -->|No| D
+    
+    style A fill:#f3e5f5
+    style B fill:#e1f5ff
+    style E fill:#fff9c4
+    style H fill:#c8e6c9
+    style K fill:#f1f8e9
+```
+
 ### Prerequisites
 - Node.js 18+ or npm 9+
 - Backend API running at `http://localhost:8000`
@@ -101,6 +125,65 @@ The frontend connects to the backend FastAPI server:
 See [backend README](../README.md) for API documentation.
 
 ## Components
+
+### Component Tree
+
+```mermaid
+graph TD
+    A["App (pages/index.tsx)"]
+    A --> B["Sidebar"]
+    A --> C["ChatInterface"]
+    A --> D["ResultsPanel"]
+    A --> E["SessionManager"]
+    A --> F["StepsList"]
+    
+    B --> B1["Navigation Links"]
+    B --> B2["Settings"]
+    
+    C --> C1["Message Display"]
+    C --> C2["User Input"]
+    C --> C3["Send Button"]
+    
+    D --> D1["SQL Query Display"]
+    D --> D2["Confidence Score"]
+    D --> D3["Anomalies List"]
+    D --> D4["Export Button"]
+    
+    E --> E1["Session ID"]
+    E --> E2["Message Counter"]
+    E --> E3["Uptime Display"]
+    
+    F --> F1["Pipeline Steps"]
+    F --> F2["Current Step"]
+    
+    style A fill:#f3e5f5
+    style C fill:#e1f5ff
+    style D fill:#fff9c4
+    style E fill:#c8e6c9
+    style F fill:#f1f8e9
+```
+
+### Data Flow
+
+```mermaid
+graph LR
+    User["👤 User<br/>Input"]
+    ChatI["ChatInterface<br/>Component"]
+    API["Backend<br/>API"]
+    Result["Results<br/>Received"]
+    Display["ResultsPanel<br/>Display"]
+    
+    User -->|Question| ChatI
+    ChatI -->|POST /chat| API
+    API -->|Answer +<br/>Metadata| Result
+    Result -->|SQL, Score,<br/>Anomalies| Display
+    Display -->|Show to User| User
+    
+    style User fill:#f3e5f5
+    style ChatI fill:#e1f5ff
+    style API fill:#fff9c4
+    style Display fill:#c8e6c9
+```
 
 ### ChatInterface
 - Message display with user/assistant styling

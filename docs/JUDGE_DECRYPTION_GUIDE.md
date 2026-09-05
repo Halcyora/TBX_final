@@ -5,6 +5,29 @@
 > 📚 **Full Docs**: See [../DOCS.md](../DOCS.md) for complete guide index  
 > **Technical Details**: See [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md)
 
+## Decryption Flow
+
+```mermaid
+sequenceDiagram
+    actor Judge
+    participant Frontend as Frontend UI
+    participant Backend as Backend API
+    participant Crypto as Encryption<br/>Module
+    
+    Judge->>Frontend: Ask query
+    Frontend->>Backend: POST /chat
+    Backend-->>Frontend: Results (masked)<br/>****3729069
+    Frontend-->>Judge: Display masked<br/>+ Decrypt button
+    Judge->>Judge: Enter code:<br/>judge_code
+    Judge->>Frontend: Click Decrypt
+    Frontend->>Backend: POST /decrypt<br/>{encrypted, code}
+    Backend->>Crypto: Validate code
+    Crypto->>Crypto: Decrypt account
+    Crypto-->>Backend: account_number
+    Backend-->>Frontend: Success + Number
+    Frontend-->>Judge: ✅ Show: 50200013729069
+```
+
 ## Quick Flow
 
 ```mermaid

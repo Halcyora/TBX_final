@@ -24,6 +24,25 @@ sequenceDiagram
 
 ## Configuration (3 Steps)
 
+### Encryption Setup Steps
+
+```mermaid
+flowchart LR
+    A["Step 1<br/>Generate Key"]
+    B["Step 2<br/>Set .env"]
+    C["Step 3<br/>Install<br/>cryptography"]
+    D["✅ Ready"]
+    
+    A --> B
+    B --> C
+    C --> D
+    
+    style A fill:#f3e5f5
+    style B fill:#e1f5ff
+    style C fill:#fff9c4
+    style D fill:#c8e6c9
+```
+
 **1. Generate Key**
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -47,6 +66,41 @@ pip install cryptography>=41.0.0
 ✅ Code-based access control  
 ✅ Audit logged  
 ✅ No performance penalty  
+
+### Security Layers
+
+```mermaid
+graph TD
+    A["Account Number<br/>50200013729069"]
+    B["Layer 1: Encryption<br/>Fernet Symmetric"]
+    C["Encrypted Value<br/>gAAAAABl9sX5..."]
+    D["Layer 2: Storage"]
+    E["Database<br/>Encrypted"]
+    F["Layer 3: Display"]
+    G["Mask in UI<br/>****3729069"]
+    H["Layer 4: Decryption<br/>Valid Code Only"]
+    I{Decryption<br/>Code<br/>Valid?}
+    J["✅ Reveal<br/>50200013729069"]
+    K["❌ Deny<br/>Invalid Code"]
+    
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H
+    H --> I
+    I -->|Yes| J
+    I -->|No| K
+    
+    style A fill:#f3e5f5
+    style B fill:#ffcdd2
+    style E fill:#ffe0b2
+    style G fill:#fff9c4
+    style J fill:#c8e6c9
+    style K fill:#ffcdd2
+```
 
 ## API Endpoints
 

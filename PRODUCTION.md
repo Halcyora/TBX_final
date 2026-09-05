@@ -2,6 +2,25 @@
 
 > 📚 **Full Docs**: See [DOCS.md](DOCS.md) for all guides and references
 
+## Deployment Decision Tree
+
+```mermaid
+graph TD
+    A["Ready to Deploy?"]
+    A -->|Dev/Testing| B["MVP Setup"]
+    A -->|Production| C["Production Setup"]
+    B --> B1["Single Instance"]
+    B --> B2["In-Memory Sessions"]
+    B --> B3["Small Dataset<br/>10 records"]
+    B --> B4["Local URL:8000"]
+    C --> C1["Multi-Instance<br/>+ Load Balancer"]
+    C --> C2["Redis Sessions<br/>Persistent"]
+    C --> C3["Large Dataset<br/>500K+ records"]
+    C --> C4["Domain +<br/>Certificates"]
+    style B fill:#c8e6c9
+    style C fill:#ffcdd2
+```
+
 ## MVP Phase (Current)
 
 ### Architecture
@@ -63,6 +82,31 @@ stats = db.get_dataset_stats()
 
 ### Key Differences
 
+### MVP vs Production Comparison
+
+```mermaid
+graph LR
+    subgraph MVP["🟢 MVP (Current)"]
+        MVP1["Single Instance"]
+        MVP2["In-Memory Sessions"]
+        MVP3["Small Dataset<br/>10 records"]
+        MVP4["No Scaling"]
+        MVP5["Fast Setup<br/><5 min"]
+    end
+    
+    subgraph PROD["🔴 Production"]
+        PROD1["Multi-Instance<br/>Load Balancer"]
+        PROD2["Redis Sessions<br/>Persistent"]
+        PROD3["Large Dataset<br/>500K+ records"]
+        PROD4["Auto-Scaling"]
+        PROD5["Setup & Hardening<br/>1-2 hours"]
+    end
+    
+    MVP -.->|Upgrade to| PROD
+    style MVP fill:#c8e6c9
+    style PROD fill:#ffcdd2
+```
+
 | Aspect | MVP | Production |
 |--------|-----|-----------|
 | Sessions | In-memory | Redis |
@@ -71,6 +115,45 @@ stats = db.get_dataset_stats()
 | CORS | `["*"]` | Restricted list |
 | Server | `uvicorn --reload` | Gunicorn + workers |
 | Persistence | None | Redis persistence |
+
+### Production Architecture
+
+```mermaid
+graph TB
+    LB["Load Balancer<br/>Nginx/HAProxy"]
+    
+    subgraph Backends["Backend Instances (x3+)"]
+        B1["FastAPI<br/>Instance 1<br/>:8001"]
+        B2["FastAPI<br/>Instance 2<br/>:8002"]
+        B3["FastAPI<br/>Instance 3<br/>:8003"]
+    end
+    
+    Redis["Redis Cluster<br/>Session Persistence<br/>6379"]
+    DuckDB["DuckDB<br/>Large Dataset<br/>500K+ rows"]
+    Bedrock["AWS Bedrock<br/>Nova Micro<br/>LLM"]
+    
+    LB --> B1
+    LB --> B2
+    LB --> B3
+    
+    B1 --> Redis
+    B2 --> Redis
+    B3 --> Redis
+    
+    B1 --> DuckDB
+    B2 --> DuckDB
+    B3 --> DuckDB
+    
+    B1 --> Bedrock
+    B2 --> Bedrock
+    B3 --> Bedrock
+    
+    style LB fill:#e1f5ff
+    style Backends fill:#f3e5f5
+    style Redis fill:#fff9c4
+    style DuckDB fill:#f1f8e9
+    style Bedrock fill:#ffe0b2
+```
 
 ### Production Requirements
 

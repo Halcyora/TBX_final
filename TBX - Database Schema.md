@@ -12,6 +12,22 @@ updated: 2026-09-05
 
 The tables a hackathon team actually needs to build and test a finance assistant against: **3 tables, one database.** No app-internal logging/feedback tables included — those aren't part of what you build or test.
 
+## Data Model
+
+```mermaid
+graph LR
+    A["🏦 Bank<br/>bank_code PK<br/>bank_name"]
+    B["💰 Account<br/>account_id PK<br/>entity_id<br/>account_number<br/>program_id<br/>available_balance<br/>bank_code FK"]
+    C["💳 Transaction<br/>transaction_id PK<br/>account_id FK<br/>transaction_date<br/>transaction_type<br/>description<br/>transaction_amount<br/>transaction_reference_id<br/>utr_number"]
+    
+    A -->|1:N| B
+    B -->|1:N| C
+    
+    style A fill:#e1f5ff
+    style B fill:#f1f8e9
+    style C fill:#fff9c4
+```
+
 ## The simple version
 
 - **`bank`** — a short list of banks (name + code).
@@ -165,5 +181,31 @@ erDiagram
         string transaction_reference_id "plaintext"
         string utr_number "sensitive"
     }
+```
+
+## Query Processing Flow
+
+```mermaid
+flowchart LR
+    User["User Query<br/>Natural Language"]
+    Parse["Parse Intent &<br/>Identify Table"]
+    Generate["Generate SQL"]
+    Validate["Validate Against<br/>Schema"]
+    Execute["Execute Query<br/>on DuckDB"]
+    Return["Return Results<br/>to Backend"]
+    
+    User --> Parse
+    Parse --> Generate
+    Generate --> Validate
+    Validate -->|Valid| Execute
+    Validate -->|Invalid| Generate
+    Execute --> Return
+    
+    style User fill:#f3e5f5
+    style Parse fill:#e1f5ff
+    style Generate fill:#fff9c4
+    style Validate fill:#ffe0b2
+    style Execute fill:#f1f8e9
+    style Return fill:#c8e6c9
 ```
 
