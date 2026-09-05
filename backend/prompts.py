@@ -4,6 +4,9 @@ Includes few-shot examples, system prompts, and response formatting
 TBX Schema: bank, account, transaction
 """
 
+import re
+from typing import Dict, List
+
 # ============================================================================
 # SYSTEM PROMPT FOR SQL GENERATION
 # ============================================================================
@@ -20,34 +23,40 @@ account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
 - account_number (VARCHAR): Account number (SENSITIVE - mask in output)
-- program_id (VARCHAR): Program/product ID (0, 4, 21, 46, 99)
-- available_balance (VARCHAR): Account balance (can be negative, zero, or extreme values)
+- program_id (INTEGER): Program/product ID (0, 4, 21, 46, 99)
+- available_balance (DECIMAL): Account balance (can be negative, zero, or extreme values) - already numeric, no CAST needed
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
 
 transaction:
 - transaction_id (VARCHAR, PRIMARY KEY): Unique transaction identifier (UUID)
 - account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
-- transaction_date (VARCHAR): Transaction timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_date (TIMESTAMP): Transaction timestamp - already a real timestamp, no CAST needed
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description (can contain special chars, quotes, slashes)
-- transaction_amount (VARCHAR): Amount (can be 0.00, micro amounts, or extreme values)
-- transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
-- utr_number (VARCHAR): Unique Transaction Reference (often empty, encrypted, or plaintext)
+- transaction_amount (DECIMAL): Amount (can be 0.00, micro amounts, or extreme values) - already numeric, no CAST needed
+- transaction_reference_id (VARCHAR): Reference/receipt number (often NULL, can be duplicated)
+- utr_number (VARCHAR): Unique Transaction Reference (often NULL, encrypted, or plaintext)
 
 IMPORTANT RULES:
 1. Add a DATE FILTER only when the user's question explicitly mentions a time period (last month, Q3, 2026, etc).
    If no time period is mentioned, return results across ALL dates in the dataset.
+   transaction_date is a TIMESTAMP with a time-of-day component, not just a date - a whole-month
+   or whole-day range MUST be written as `>= '2026-06-01' AND < '2026-07-01'`, never
+   `BETWEEN '2026-06-01' AND '2026-06-30'` (BETWEEN's upper bound means midnight on the 30th,
+   silently dropping every transaction later that same day).
+   "Spend" means money going OUT - always filter transaction_type = 'debit' for spend/spending
+   questions, never sum both credit and debit together.
 2. JOIN tables only when necessary:
    - To get bank names: JOIN bank ON account.bank_code = bank.bank_code
    - To get account details: JOIN account ON transaction.account_id = account.account_id
    - Never JOIN unnecessarily - keep queries simple.
 3. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
 4. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
-5. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
-6. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
-7. Return meaningful column names using AS aliases
-8. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
-9. Always think step-by-step before writing SQL.
+5. A missing reference/UTR is a real SQL NULL - check with "IS NULL" / "IS NOT NULL", never "= ''"
+6. Return meaningful column names using AS aliases
+7. All numeric and date columns are already properly typed (DECIMAL / TIMESTAMP / INTEGER) -
+   never wrap them in CAST(... AS DECIMAL); just compare/aggregate them directly.
+8. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -59,11 +68,11 @@ SQL_EXAMPLES = [
     {
         "question": "What is the total amount of transactions from HDFC Bank?",
         "reasoning": "Need to: 1) JOIN account with bank to get bank names, 2) Filter by HDFC, 3) Sum transaction amounts",
-        "sql": """SELECT 
+        "sql": """SELECT
     b.bank_code,
     b.bank_name,
     COUNT(t.transaction_id) as transaction_count,
-    SUM(CAST(t.transaction_amount AS DECIMAL)) as total_amount
+    SUM(t.transaction_amount) as total_amount
 FROM account a
 JOIN bank b ON a.bank_code = b.bank_code
 JOIN transaction t ON a.account_id = t.account_id
@@ -73,32 +82,32 @@ GROUP BY b.bank_code, b.bank_name"""
     {
         "question": "Show me accounts with negative balances",
         "reasoning": "Need to: 1) Filter accounts where available_balance < 0, 2) Get bank name, 3) Show account details",
-        "sql": """SELECT 
+        "sql": """SELECT
     a.account_id,
     a.account_number,
     a.program_id,
-    CAST(a.available_balance AS DECIMAL) as balance,
+    a.available_balance as balance,
     b.bank_name
 FROM account a
 JOIN bank b ON a.bank_code = b.bank_code
-WHERE CAST(a.available_balance AS DECIMAL) < 0
-ORDER BY CAST(a.available_balance AS DECIMAL) ASC"""
+WHERE a.available_balance < 0
+ORDER BY a.available_balance ASC"""
     },
     {
         "question": "How many credit vs debit transactions are there?",
         "reasoning": "Need to: 1) Group by transaction_type, 2) Count transactions, 3) Sum amounts for each type",
-        "sql": """SELECT 
+        "sql": """SELECT
     t.transaction_type,
     COUNT(t.transaction_id) as transaction_count,
-    SUM(CAST(t.transaction_amount AS DECIMAL)) as total_amount,
-    AVG(CAST(t.transaction_amount AS DECIMAL)) as avg_amount
+    SUM(t.transaction_amount) as total_amount,
+    AVG(t.transaction_amount) as avg_amount
 FROM transaction t
 GROUP BY t.transaction_type"""
     },
     {
         "question": "Which accounts have zero available balance?",
-        "reasoning": "Need to: 1) Filter accounts where available_balance = '0.00', 2) Get associated transactions, 3) Show account details",
-        "sql": """SELECT 
+        "reasoning": "Need to: 1) Filter accounts where available_balance = 0, 2) Get associated transactions, 3) Show account details",
+        "sql": """SELECT
     a.account_id,
     a.account_number,
     a.program_id,
@@ -107,57 +116,140 @@ GROUP BY t.transaction_type"""
 FROM account a
 LEFT JOIN transaction t ON a.account_id = t.account_id
 JOIN bank b ON a.bank_code = b.bank_code
-WHERE a.available_balance = '0.00'
+WHERE a.available_balance = 0
 GROUP BY a.account_id, a.account_number, a.program_id, b.bank_name"""
     },
     {
         "question": "Show transactions with missing UTR or reference ID",
-        "reasoning": "Need to: 1) Filter transactions where utr_number is empty OR transaction_reference_id is empty, 2) Get account/bank info, 3) Count how many",
-        "sql": """SELECT 
+        "reasoning": "Need to: 1) Filter transactions where utr_number IS NULL OR transaction_reference_id IS NULL, 2) Get account/bank info, 3) Count how many",
+        "sql": """SELECT
     t.transaction_id,
     t.account_id,
     t.transaction_date,
     t.transaction_type,
-    CAST(t.transaction_amount AS DECIMAL) as amount,
+    t.transaction_amount as amount,
     t.description,
-    CASE WHEN t.utr_number = '' THEN 'Missing UTR' ELSE 'Has UTR' END as utr_status,
-    CASE WHEN t.transaction_reference_id = '' THEN 'Missing Ref' ELSE 'Has Ref' END as ref_status
+    CASE WHEN t.utr_number IS NULL THEN 'Missing UTR' ELSE 'Has UTR' END as utr_status,
+    CASE WHEN t.transaction_reference_id IS NULL THEN 'Missing Ref' ELSE 'Has Ref' END as ref_status
 FROM transaction t
-WHERE t.utr_number = '' OR t.transaction_reference_id = ''
+WHERE t.utr_number IS NULL OR t.transaction_reference_id IS NULL
 LIMIT 20"""
     },
     {
         "question": "What is the average transaction amount by account?",
         "reasoning": "Need to: 1) Group by account, 2) Calculate average amount, 3) Join to get bank/account details, 4) Order by average",
-        "sql": """SELECT 
+        "sql": """SELECT
     a.account_id,
     a.account_number,
     b.bank_name,
     COUNT(t.transaction_id) as transaction_count,
-    AVG(CAST(t.transaction_amount AS DECIMAL)) as avg_amount,
-    MIN(CAST(t.transaction_amount AS DECIMAL)) as min_amount,
-    MAX(CAST(t.transaction_amount AS DECIMAL)) as max_amount
+    AVG(t.transaction_amount) as avg_amount,
+    MIN(t.transaction_amount) as min_amount,
+    MAX(t.transaction_amount) as max_amount
 FROM account a
 LEFT JOIN transaction t ON a.account_id = t.account_id
 JOIN bank b ON a.bank_code = b.bank_code
 GROUP BY a.account_id, a.account_number, b.bank_name
 ORDER BY avg_amount DESC"""
+    },
+    {
+        "question": "How much did we spend in June 2026?",
+        "reasoning": (
+            "'Spend' means money going out - filter transaction_type = 'debit', never sum both "
+            "credit and debit. transaction_date is a TIMESTAMP, so a whole-month range must use "
+            "a half-open bound (>= start of month AND < start of NEXT month) - BETWEEN with a "
+            "'2026-06-30' upper bound would silently drop every transaction later that same day."
+        ),
+        "sql": """SELECT SUM(transaction_amount) as total_spent
+FROM transaction
+WHERE transaction_type = 'debit'
+    AND transaction_date >= '2026-06-01'
+    AND transaction_date < '2026-07-01'"""
+    },
+    {
+        "question": "For each bank, show average account balance and total transaction volume",
+        "reasoning": (
+            "Need TWO different aggregates from TWO different tables: AVG(available_balance) is "
+            "per-account (from account), SUM(transaction_amount) is per-transaction (from "
+            "transaction). Joining all three tables in one GROUP BY would fan out the account "
+            "rows once per matching transaction, corrupting the account-side average. Compute "
+            "each aggregate in its own subquery grouped by bank_code, then join the two results."
+        ),
+        "sql": """SELECT
+    b.bank_code,
+    b.bank_name,
+    acct.avg_balance,
+    txn.total_volume
+FROM bank b
+LEFT JOIN (
+    SELECT bank_code, AVG(available_balance) as avg_balance
+    FROM account
+    GROUP BY bank_code
+) acct ON b.bank_code = acct.bank_code
+LEFT JOIN (
+    SELECT a.bank_code, SUM(t.transaction_amount) as total_volume
+    FROM account a
+    JOIN transaction t ON a.account_id = t.account_id
+    GROUP BY a.bank_code
+) txn ON b.bank_code = txn.bank_code"""
+    },
+    {
+        "question": "Find micro transactions (0.01 or less) and show their distribution by type",
+        "reasoning": (
+            "The threshold is explicit in the question (0.01), not 0 - use that exact boundary, "
+            "not < 0 or = 0. Group by transaction_type and the amount itself to show the "
+            "distribution, not just a single total."
+        ),
+        "sql": """SELECT
+    transaction_type,
+    transaction_amount,
+    COUNT(*) as count
+FROM transaction
+WHERE transaction_amount <= 0.01
+GROUP BY transaction_type, transaction_amount
+ORDER BY transaction_type, transaction_amount"""
+    },
+    {
+        "question": "What is the longest gap between consecutive transactions for each account?",
+        "reasoning": (
+            "'Gap between consecutive transactions' means the difference between each "
+            "transaction and the one right before it for the SAME account, ordered by date - "
+            "not simply the span between the first and last transaction. Use LAG() OVER "
+            "(PARTITION BY account_id ORDER BY transaction_date) to get each transaction's "
+            "previous transaction_date, compute the per-row gap, then take MAX per account. "
+            "Keep this as ONE nested SELECT, not a separate WITH clause - a two-statement query "
+            "is more likely to come out with a missing keyword or an unbalanced parenthesis."
+        ),
+        "sql": """SELECT account_id, MAX(gap) as longest_gap
+FROM (
+    SELECT
+        account_id,
+        transaction_date - LAG(transaction_date) OVER (
+            PARTITION BY account_id ORDER BY transaction_date
+        ) as gap
+    FROM transaction
+) sub
+WHERE gap IS NOT NULL
+GROUP BY account_id
+ORDER BY longest_gap DESC"""
     }
 ]
 
 # ============================================================================
-# PROMPT FOR CHAIN-OF-THOUGHT SQL GENERATION
+# SQL REPAIR PROMPT (execution-feedback self-repair)
+# One bounded retry: feed the real DB error back instead of asking the model to
+# blindly "review" SQL with no signal to react to.
 # ============================================================================
-COT_PROMPT_TEMPLATE = """Question: {question}
+SQL_REPAIR_PROMPT_TEMPLATE = """This SQL query failed when run against the real database:
 
-Think step-by-step:
-1. What data do we need? (Which tables?)
-2. What filters apply? (vendor, status - only add a date range if a time period is explicitly mentioned)
-3. What calculations? (SUM, COUNT, AVG?)
-4. How to join tables? (if needed)
-5. What order/limit? (sorting, top results?)
+{sql}
 
-Now write the SQL query based on this reasoning:"""
+Database error:
+{error}
+
+Fix the query so it runs successfully and still answers the original question: "{question}"
+
+Return ONLY the corrected SQL query, nothing else. No markdown, no explanation."""
 
 # ============================================================================
 # CLASSIFICATION PROMPT (Determine query type and confidence)
@@ -172,19 +264,19 @@ account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
 - entity_id (VARCHAR): Entity/customer ID (UUID)
 - account_number (VARCHAR): Account number (SENSITIVE - do not expose)
-- program_id (VARCHAR): Program ID (0, 4, 21, 46, 99)
-- available_balance (VARCHAR): Current balance (can be negative/zero/extreme)
+- program_id (INTEGER): Program ID (0, 4, 21, 46, 99)
+- available_balance (DECIMAL): Current balance (can be negative/zero/extreme)
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
 
 transaction:
 - transaction_id (VARCHAR, PRIMARY KEY): Unique transaction ID (UUID)
 - account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
-- transaction_date (VARCHAR): Transaction timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_date (TIMESTAMP): Transaction timestamp
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these values)
 - description (VARCHAR): Transaction description
-- transaction_amount (VARCHAR): Amount (can be 0.00, extreme values, etc.)
-- transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
-- utr_number (VARCHAR): UTR (often empty, encrypted, or plaintext)
+- transaction_amount (DECIMAL): Amount (can be 0.00, extreme values, etc.)
+- transaction_reference_id (VARCHAR): Reference/receipt number (often NULL, can be duplicated)
+- utr_number (VARCHAR): UTR (often NULL, encrypted, or plaintext)
 
 Analyze this question about financial data:
 "{question}"
@@ -207,6 +299,28 @@ Respond in JSON format:
     "confidence_score": 0.0-1.0,
     "clarification_questions": []
 }}"""
+
+# vLLM enforces this via guided decoding on the OpenAI-compatible response_format param
+# (confirmed against the deployed endpoint - see backend/langgraph_flow.py's call_llm),
+# so classify_query_node gets guaranteed-valid JSON instead of hunting for braces in free
+# text. Bedrock (fallback path) ignores response_format and relies on the prompt text above.
+CLASSIFICATION_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "query_classification",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "intent": {"type": "string"},
+                "entities": {"type": "object"},
+                "filters": {"type": "object"},
+                "confidence_score": {"type": "number"},
+                "clarification_questions": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["intent", "entities", "filters", "confidence_score", "clarification_questions"],
+        },
+    },
+}
 
 # ============================================================================
 # CLARIFICATION PROMPT (Ask user for missing info)
@@ -243,24 +357,6 @@ Format:
 {anomalies_section}"""
 
 # ============================================================================
-# VALIDATION PROMPT (Validate SQL correctness)
-# ============================================================================
-SQL_VALIDATION_PROMPT = """Review this SQL query for correctness:
-
-{sql}
-
-Check:
-1. Syntax: Valid SQL?
-2. Schema: All tables/columns exist?
-3. Logic: Answers the question correctly?
-4. Performance: Reasonable query structure?
-
-If there are issues, fix them and return corrected SQL.
-If query is correct, return it as-is.
-
-Return ONLY the SQL query (corrected if needed), nothing else."""
-
-# ============================================================================
 # ANOMALY EXPLANATION PROMPT
 # ============================================================================
 ANOMALY_EXPLANATION_PROMPT = """Explain why these transactions are anomalous:
@@ -282,10 +378,37 @@ CONFIDENCE_COMPONENTS = {
     "result_reliability": "How confident we are in the results"
 }
 
+_STOPWORDS = {
+    "the", "a", "an", "is", "are", "of", "for", "in", "on", "by", "to", "and", "or", "what",
+    "which", "show", "me", "how", "many", "much", "with", "do", "we", "did", "list", "find",
+    "get", "there", "all", "each", "per",
+}
+
+
+def _tokenize(text: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9_]+", text.lower()) if w not in _STOPWORDS and len(w) > 2}
+
+
+def _select_examples(user_question: str, k: int = 5) -> List[Dict[str, str]]:
+    """Pick the k most relevant few-shot examples by keyword overlap (question + reasoning
+    text, so domain vocabulary like "gap"/"consecutive"/"micro" is matchable) instead of always
+    sending the full example bank - keeps the prompt focused for a small model as the example
+    bank grows. No embeddings needed for a question set this scoped; ties keep original order.
+    # ponytail: keyword overlap, add embedding similarity if the example bank grows much larger
+    """
+    q_tokens = _tokenize(user_question)
+    scored = [
+        (len(q_tokens & _tokenize(ex["question"] + " " + ex["reasoning"])), i, ex)
+        for i, ex in enumerate(SQL_EXAMPLES)
+    ]
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [ex for _, _, ex in scored[:k]]
+
+
 def build_few_shot_prompt(user_question: str, history_context: str = "") -> str:
-    """Build few-shot prompt with examples, optionally grounded in prior turns"""
+    """Build few-shot prompt with the most relevant examples, optionally grounded in prior turns"""
     examples_text = ""
-    for i, example in enumerate(SQL_EXAMPLES, 1):
+    for i, example in enumerate(_select_examples(user_question), 1):
         examples_text += f"""
 Example {i}:
 Question: {example['question']}
@@ -293,7 +416,7 @@ Thinking: {example['reasoning']}
 SQL: {example['sql']}
 ---
 """
-    
+
     return f"""{SQL_GENERATION_SYSTEM_PROMPT}
 
 {history_context}{examples_text}
@@ -303,9 +426,9 @@ Now, for this question:
 
 Generate the SQL query:"""
 
-def build_cot_prompt(user_question: str, history_context: str = "") -> str:
-    """Build chain-of-thought prompt, optionally grounded in prior turns"""
-    return f"{history_context}{COT_PROMPT_TEMPLATE.format(question=user_question)}"
+def build_repair_prompt(sql: str, error: str, question: str) -> str:
+    """Build the execution-feedback repair prompt: feed the real DB error back to the model"""
+    return SQL_REPAIR_PROMPT_TEMPLATE.format(sql=sql, error=error, question=question)
 
 def build_classification_prompt(user_question: str, history_context: str = "") -> str:
     """Build the query classification prompt, optionally grounded in prior conversation turns"""

@@ -6,7 +6,7 @@
 - **Frontend**: React + Next.js (local dev)
 - **Backend**: FastAPI with in-process session management (no Redis required)
 - **Database**: DuckDB with small/large dataset switching
-- **LLM Pipeline**: LangGraph agentic loop with Amazon Nova Micro (1.3B params) via AWS Bedrock
+- **LLM Pipeline**: LangGraph agentic loop with Qwen2.5-Coder-1.5B-Instruct (local Ollama / vLLM on GCP), AWS Bedrock kept as a fallback
 
 ### Running MVP Locally
 

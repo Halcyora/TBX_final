@@ -4,7 +4,7 @@
 
 ## Overview
 
-A sophisticated finance assistant that understands natural language questions about financial data and returns accurate, grounded answers. Built with LangGraph, Amazon Nova Micro, FastAPI, and DuckDB.
+A sophisticated finance assistant that understands natural language questions about financial data and returns accurate, grounded answers. Built with LangGraph, Qwen2.5-Coder-1.5B-Instruct, FastAPI, and DuckDB.
 
 ### Key Features
 - 🤖 **Natural Language Understanding**: Parse complex financial questions
@@ -13,7 +13,8 @@ A sophisticated finance assistant that understands natural language questions ab
 - 🚨 **Anomaly Detection**: Hybrid approach (statistical + ML + business rules)
 - 📈 **Confidence Signaling**: Transparent about answer certainty
 - 💾 **Data Export**: CSV breakdown tables
-- ⚡ **Lightweight Models**: Runs on AWS Nova Micro (1.3B params) via AWS Bedrock
+- ⚡ **Lightweight Models**: Qwen2.5-Coder-1.5B-Instruct, served locally (Ollama) or via vLLM;
+  AWS Bedrock (Nova Micro etc.) kept as a switchable fallback. See [INTERNAL_NOTES.md](INTERNAL_NOTES.md) for the full rationale and measured accuracy.
 
 ## Architecture
 
@@ -35,28 +36,32 @@ A sophisticated finance assistant that understands natural language questions ab
         ▼                ▼                ▼
    ┌─────────┐   ┌──────────────┐   ┌────────────┐
    │LangGraph│   │  DuckDB      │   │   Redis    │
-   │ Agentic │──▶│ Financial    │   │  Sessions  │
-   │  Loop   │   │ Database     │   │  + Cache   │
+   │ Agentic │──▶│ Financial    │   │  Verified- │
+   │  Loop   │   │ Database     │   │ query cache│
    └────┬────┘   └──────────────┘   └────────────┘
         │
         │ Nodes:
         ├─ Classify (intent, entities, confidence)
         ├─ Clarify (if needed)
-        ├─ SQL Generation (few-shot + CoT)
-        ├─ SQL Validation (static + LLM)
+        ├─ Verified-query cache lookup (Redis, optional)
+        ├─ SQL Generation (few-shot, single call)
+        ├─ SQL Validation (static safety checks)
         ├─ Query Execution
+        ├─ SQL Repair (execution-feedback, bounded to 1 retry)
         ├─ Anomaly Detection (hybrid)
         ├─ Response Formatting
         └─ Export
         │
         ▼
    ┌──────────────────────────────────────────┐
-   │   AWS Bedrock (Amazon Nova Micro)        │
-   │   - 1.3B parameters                      │
+   │   Qwen2.5-Coder-1.5B-Instruct             │
+   │   - Local (Ollama) now, vLLM on GCP next │
    │   - PS Section 7 compliant (<=20B params)│
-   │   - Low-latency, cost-efficient          │
+   │   - AWS Bedrock kept as fallback         │
    └──────────────────────────────────────────┘
 ```
+
+See [INTERNAL_NOTES.md](INTERNAL_NOTES.md) for the detailed architecture diagram and rationale.
 
 ## Project Structure
 
@@ -103,8 +108,9 @@ tbx_finance_assistant/
 ### Prerequisites
 - Python 3.10+
 - Node.js 18+ (for frontend)
-- Redis (or Docker)
-- AWS Account with Bedrock access
+- An OpenAI-compatible Qwen2.5-Coder-1.5B-Instruct endpoint (e.g. `ollama pull qwen2.5-coder:1.5b-instruct`, or the deployed vLLM endpoint) — set `LLM_BASE_URL`/`LLM_MODEL_NAME` in `.env`
+- Optional: Redis (verified-query cache — the app runs fine without it)
+- Optional: AWS Account with Bedrock access (only needed if using the Bedrock fallback model)
 
 ### 1. Environment Setup
 
@@ -173,7 +179,7 @@ curl -X POST http://localhost:8000/chat \
   -d '{
     "session_id": "session-uuid",
     "message": {"content": "What is the total spending across all accounts?"},
-    "model": "amazon.nova-micro"
+    "model": "qwen2.5-coder-1.5b"
   }'
 ```
 
@@ -198,35 +204,38 @@ Complex:
 
 ## Model Selection & Benchmarking
 
-### Primary Model: Amazon Nova Micro
+### Primary Model: Qwen2.5-Coder-1.5B-Instruct
 
-**Amazon Nova Micro** (1.3B parameters) is the default model for this deployment.
-- **Parameters**: 1.3B (AWS-native foundation model)
-- **Compliance**: Fully compliant with Problem Statement Section 7 constraint (<=20B params)
-- **Inference**: Low-latency, cost-efficient via AWS Bedrock
-- **Use Case**: Optimized for structured data tasks like SQL generation and financial queries
+**Qwen2.5-Coder-1.5B-Instruct** (1.5B parameters, coder-tuned) is the default model.
+- **Parameters**: 1.5B — well under the Problem Statement Section 7 cap (<=20B params)
+- **Serving**: OpenAI-compatible `/v1/chat/completions` endpoint — local (Ollama) for
+  development, the same client points at a vLLM deployment on GCP for production
+- **Use Case**: Coder-tuned models are competitive with much larger general models on the
+  narrow task this assistant needs (SQL generation over a 3-table schema)
+- **Fallback**: AWS Bedrock (Nova Micro, etc.) stays available via the existing model-alias switch
 
 ### Running Benchmark Suite
 
-Benchmark multiple models against TBX schema queries:
-
 ```bash
 cd benchmarks
-python run_benchmark.py
+python run_benchmark.py --dataset small   # hand-verified 10-row reference set
+python run_benchmark.py --dataset large   # 10K accounts / 500K transactions, scale spot-check
 
 # Generates:
 # - benchmark_results_YYYYMMDD_HHMMSS.json
 # - report_YYYYMMDD_HHMMSS.txt
 ```
 
-The benchmark suite compares Nova Micro against alternative compliant models (Llama 3.1-8B, Mistral-7B, etc.) using execution-verified scoring: extracts generated SQL, runs it against real DuckDB data, and compares results to reference queries.
+The suite runs Qwen2.5-Coder-1.5B twice per question — once single-shot ("baseline"), once with
+the execution-feedback repair loop enabled ("with-repair") — using execution-verified scoring:
+extracts the generated SQL, runs it against real DuckDB data, and compares results to reference
+queries. See [INTERNAL_NOTES.md](INTERNAL_NOTES.md) §4 for the measured numbers.
 
-### Model: Amazon Nova Micro
-**Amazon Nova Micro** (1.3B parameters) is the primary model:
-- ✅ **Lightweight**: 1.3B params, PS Section 7 compliant (<=20B)
-- ✅ **Fast**: Sub-second latency via AWS Bedrock
-- ✅ **Accurate**: Optimized for structured financial data tasks
-- ✅ **Cost-Efficient**: Lower inference costs than larger models
+### Model: Qwen2.5-Coder-1.5B-Instruct
+- ✅ **Lightweight**: 1.5B params, PS Section 7 compliant (<=20B)
+- ✅ **Accurate**: coder-tuned, and paired with a real-error-feedback repair loop (see
+  [INTERNAL_NOTES.md](INTERNAL_NOTES.md) §3)
+- ✅ **Portable**: same OpenAI-compatible client works local now and against vLLM on GCP later
 
 ## Key Design Decisions
 
@@ -237,10 +246,10 @@ The benchmark suite compares Nova Micro against alternative compliant models (Ll
 - Enables grounding verification
 
 ### 2. **Lightweight Models**
-✅ **Rationale**: 
-- Amazon Nova Micro: 1.3B params, PS Section 7 compliant
-- <500ms latency for real-time chat
-- Significantly lower costs than frontier models
+✅ **Rationale**:
+- Qwen2.5-Coder-1.5B-Instruct: 1.5B params, PS Section 7 compliant, coder-tuned for this task's SQL-generation-heavy workload
+- Portable serving: same OpenAI-compatible client works against a local Ollama instance or the vLLM deployment on GCP
+- AWS Bedrock (Nova Micro, etc.) kept available as a fallback via the model-alias switch
 
 ### 3. **Hybrid Anomaly Detection**
 ✅ **Approach**:
@@ -249,12 +258,14 @@ The benchmark suite compares Nova Micro against alternative compliant models (Ll
 - ML-based: Isolation Forest for pattern detection
 - Context: Explain why each anomaly matters
 
-### 4. **Redis Session Management**
+### 4. **Redis Verified-Query Cache**
 ✅ **Benefits**:
-- Fast access to conversation context
-- Prompt caching for repeated queries
-- Automatic expiration (60 min default)
-- Scalable across backend instances
+- Replays SQL that has already executed successfully for an equivalent prior question, skipping LLM generation entirely
+- Strictly more deterministic than regenerating SQL from scratch each time
+- Always re-executed against live data, never trusted blindly
+- Optional: fails open (cache silently skipped) if Redis isn't reachable
+
+(Session/conversation history itself is stored in-process, persisted to a local JSON file — see `backend/main.py`'s `SessionManager` — not Redis.)
 
 ### 5. **DuckDB for Analytics**
 ✅ **Advantages**:
@@ -305,23 +316,22 @@ Levels:
 
 ## Performance Metrics
 
-### Latency (AWS Bedrock, Amazon Nova Micro)
-- Query Parsing: 10ms
-- SQL Generation: 400-600ms avg
-- Query Execution: 20-50ms
-- Response Formatting: 10ms
-- **Total**: ~500-750ms avg
+Measured via `benchmarks/run_benchmark.py` against the live Qwen2.5-Coder-1.5B-Instruct endpoint
+(execution-verified: SQL actually run against DuckDB, compared to reference results). Full
+numbers and an honest read of what's a real effect vs run-to-run variance: see
+[INTERNAL_NOTES.md](INTERNAL_NOTES.md) §4.
 
-### Accuracy (execution-verified: SQL actually run against DuckDB)
-- Easy questions: 70%+
-- Moderate questions: 75%+
-- Complex questions: 70%+
-- Overall execution correctness: 72%+ (Nova Micro)
+### Accuracy (small dataset, 10 hand-verified rows/table)
+- Easy questions: 100%
+- Moderate questions: 80%
+- Complex questions: 46.7%
+- Overall execution correctness: 75.6%
+- SQL execution rate: 100%
 
 ### Grounding
-- Model adherence to data (SQL/schema keyword presence): 80%
-- Hallucination rate: <20%
-- SQL execution rate (ran without error): >90%
+- Every answer comes from executing SQL against the real database, never from the model stating a number directly
+- Hallucination rate (grounding heuristic): ~20%
+- SQL execution rate (ran without error): 93-100% depending on dataset size
 
 ## Deployment
 
@@ -377,23 +387,20 @@ Full API docs available at:
 
 ## Model Efficiency Justification
 
-**Why Amazon Nova Micro?**
-- **Lightweight**: 1.3B parameters (PS Section 7 constraint: <=20B params)
-- **Fast**: Sub-500ms latency for real-time chat via AWS Bedrock
-- **Accurate**: Optimized for structured financial data SQL generation
-- **Cost-Efficient**: Significantly lower costs than larger foundation models
-- **AWS-Native**: Fully integrated with AWS Bedrock for seamless deployment
+**Why Qwen2.5-Coder-1.5B-Instruct?**
+- **Lightweight**: 1.5B parameters (PS Section 7 constraint: <=20B params) — a small fraction of the allowed budget
+- **Coder-tuned**: this task is narrow (SQL generation + explaining a computed result), exactly where a small coder-tuned model is competitive with much larger general models
+- **Portable serving**: an OpenAI-compatible client talks to either a local Ollama instance or the production vLLM deployment on GCP — no code change to switch
+- **Paired with a repair loop, not raw scale**: accuracy comes from execution-feedback self-repair, real column types, and a verified-query cache (see [INTERNAL_NOTES.md](INTERNAL_NOTES.md) §3), not from a bigger model
 
-**Why Bedrock over local inference?**
-- Managed service: No need to run Ollama locally
-- Consistent performance: No hardware dependency
-- Scalability: Easy to upgrade models without code changes
-- Integration: Unified AWS credential management
+**Why keep AWS Bedrock as a fallback?**
+- Same `model_alias` switch already in the code, no reason to delete it
+- Useful if the vLLM deployment is ever unavailable during the demo
 
 ## License & Attribution
 
-Dataset: Synthetically generated for TBX Hackathon  
-Models: Amazon Nova Micro (AWS), served via AWS Bedrock  
+Dataset: Synthetically generated for TBX Hackathon
+Models: Qwen2.5-Coder-1.5B-Instruct (primary; local/vLLM), AWS Bedrock (fallback)
 Framework: LangGraph (LangChain)
 
 ## Support

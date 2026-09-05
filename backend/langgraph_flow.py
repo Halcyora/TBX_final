@@ -7,11 +7,10 @@ import json
 import os
 import logging
 import asyncio
-import urllib.request
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-import boto3
+import httpx
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
@@ -19,12 +18,12 @@ from pydantic import BaseModel
 
 from database import get_db
 from prompts import (
-    build_few_shot_prompt, build_cot_prompt, build_response_prompt,
-    build_classification_prompt, CLASSIFICATION_PROMPT, SQL_VALIDATION_PROMPT,
-    CLARIFICATION_PROMPT_TEMPLATE
+    build_few_shot_prompt, build_response_prompt, build_repair_prompt,
+    build_classification_prompt, CLARIFICATION_PROMPT_TEMPLATE, CLASSIFICATION_JSON_SCHEMA
 )
 from sql_validator import SQLValidator
 from tools import QueryExecutor, AnomalyDetector, DataExporter, ContextManager
+from query_cache import get_cached_sql, store_verified_sql
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -32,21 +31,22 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # LLM CLIENT
 #
-# AWS Nova Micro: 1.3B parameters, AWS-native Bedrock model
-# Optimized for low-latency, cost-efficient inference on structured data tasks
-# Fully compliant with Problem Statement Section 7 hard constraint (<=20B params)
+# Primary: Qwen2.5-Coder-1.5B-Instruct, served locally (Ollama) or via vLLM on
+# GCP - both speak the same OpenAI-compatible /v1/chat/completions schema, so
+# only LLM_BASE_URL changes between the two, no code changes.
+# Fallback: AWS Bedrock (Nova Micro etc.), kept switchable via model_alias.
 # ============================================================================
 
-DEFAULT_MODEL_ALIAS = "amazon.nova-micro"  # AWS Bedrock, 1.3B params - PS-compliant
+DEFAULT_MODEL_ALIAS = "qwen2.5-coder-1.5b"
 
-# Bedrock model aliases for benchmarking
-_MODEL_ALIAS_ENV_KEYS = {
+# Bedrock model aliases (fallback path)
+_BEDROCK_MODEL_ALIAS_ENV_KEYS = {
     "amazon.nova-micro": "NOVA_MICRO_MODEL_ID",
     "llama3-1-8b": "LLAMA_8B_MODEL_ID",
     "mistral-7b": "MISTRAL_7B_MODEL_ID",
     "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
 }
-_MODEL_ALIAS_DEFAULTS = {
+_BEDROCK_MODEL_ALIAS_DEFAULTS = {
     "amazon.nova-micro": "amazon.nova-micro-v1:0",
     "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
     "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
@@ -59,6 +59,7 @@ _bedrock_client = None
 def _get_bedrock_client():
     global _bedrock_client
     if _bedrock_client is None:
+        import boto3  # only imported if the Bedrock fallback is actually used
         _bedrock_client = boto3.client(
             "bedrock-runtime",
             region_name=os.getenv("AWS_REGION", "us-east-1"),
@@ -68,16 +69,10 @@ def _get_bedrock_client():
     return _bedrock_client
 
 
-def _resolve_model_id(model_alias: str) -> str:
-    alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "amazon.nova-micro"
-    env_key = _MODEL_ALIAS_ENV_KEYS[alias]
-    return os.getenv(env_key, _MODEL_ALIAS_DEFAULTS[alias])
-
-
-def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,
-             max_tokens: int = 1024, temperature: float = 0.2) -> str:
-    """Call AWS Bedrock model and return its text response"""
-    model_id = _resolve_model_id(model_alias)
+def _call_bedrock(prompt: str, model_alias: str, system: Optional[str],
+                   max_tokens: int, temperature: float) -> str:
+    alias = model_alias if model_alias in _BEDROCK_MODEL_ALIAS_ENV_KEYS else "amazon.nova-micro"
+    model_id = os.getenv(_BEDROCK_MODEL_ALIAS_ENV_KEYS[alias], _BEDROCK_MODEL_ALIAS_DEFAULTS[alias])
     client = _get_bedrock_client()
 
     kwargs: Dict[str, Any] = {
@@ -90,6 +85,47 @@ def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Option
 
     response = client.converse(**kwargs)
     return response["output"]["message"]["content"][0]["text"]
+
+
+def _call_openai_compatible(prompt: str, system: Optional[str],
+                             max_tokens: int, temperature: float,
+                             response_format: Optional[Dict[str, Any]] = None) -> str:
+    """Call a local Ollama / GCP vLLM endpoint via the OpenAI-compatible chat completions API.
+    response_format: an OpenAI-style {"type": "json_schema", "json_schema": {...}} dict - vLLM
+    enforces this via guided decoding (confirmed working against the deployed vLLM 0.28 endpoint;
+    the older guided_json/guided_choice params are deprecated on that version and were confirmed
+    NOT enforced, so this is the only structured-output path used here)."""
+    base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    model_name = os.getenv("LLM_MODEL_NAME", "qwen2.5-coder:1.5b-instruct")
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    body: Dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format:
+        body["response_format"] = response_format
+
+    response = httpx.post(f"{base_url}/chat/completions", json=body, timeout=60.0)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,
+             max_tokens: int = 1024, temperature: float = 0.2,
+             response_format: Optional[Dict[str, Any]] = None) -> str:
+    """Call the configured LLM and return its text response.
+    response_format is only honored on the OpenAI-compatible path (see _call_openai_compatible);
+    the Bedrock fallback path ignores it and relies on prompt-level JSON instructions instead."""
+    if model_alias in _BEDROCK_MODEL_ALIAS_ENV_KEYS:
+        return _call_bedrock(prompt, model_alias, system, max_tokens, temperature)
+    return _call_openai_compatible(prompt, system, max_tokens, temperature, response_format)
 
 # ============================================================================
 # STATE DEFINITION
@@ -111,11 +147,13 @@ class FinanceAssistantState(BaseModel):
     sql_query: Optional[str] = None
     sql_valid: bool = False
     sql_errors: List[str] = []
-    
+    cache_hit: bool = False
+
     # Execution stage
     query_results: List[Dict[str, Any]] = []
     execution_error: Optional[str] = None
-    
+    repair_attempted: bool = False
+
     # Anomaly detection stage
     anomalies: List[Dict[str, Any]] = []
     anomaly_summary: str = ""
@@ -128,7 +166,7 @@ class FinanceAssistantState(BaseModel):
     grounding_info: Dict[str, Any] = {}
     
     # Meta
-    model_used: str = "amazon.nova-micro"
+    model_used: str = DEFAULT_MODEL_ALIAS
     processing_stages_completed: List[str] = []
     stage_details: Dict[str, str] = {}
     
@@ -151,10 +189,13 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         prompt = build_classification_prompt(state.user_query, history_context)
 
         response_text = await asyncio.to_thread(
-            call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+            call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1,
+            response_format=CLASSIFICATION_JSON_SCHEMA,
         )
-        
-        # Try to extract JSON
+
+        # Structured output (response_format) guarantees valid JSON on the OpenAI-compatible
+        # path; this brace-hunting stays only as a defensive fallback for the Bedrock path,
+        # which ignores response_format.
         try:
             json_start = response_text.find('{')
             json_end = response_text.rfind('}') + 1
@@ -223,106 +264,164 @@ async def clarification_node(state: FinanceAssistantState) -> FinanceAssistantSt
     return state
 
 
+def _strip_sql_markdown(sql_text: str) -> str:
+    """Remove markdown code-fences a model may wrap around a SQL response"""
+    if "```sql" in sql_text:
+        return sql_text.split("```sql")[1].split("```")[0].strip()
+    elif "```" in sql_text:
+        return sql_text.split("```")[1].split("```")[0].strip()
+    return sql_text.strip()
+
+
+def _result_signature(rows: List[Dict[str, Any]]) -> str:
+    """Order-independent, type-normalized signature of a query result, for majority voting
+    across execution-guided self-consistency candidates (see sql_generation_node)."""
+    normalized = sorted(tuple(sorted((k, str(v)) for k, v in row.items())) for row in rows)
+    return str(normalized)
+
+
 async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantState:
     """
-    Generate SQL query using few-shot + chain-of-thought
+    Generate SQL query with few-shot examples, or reuse a previously execution-verified
+    query for an equivalent question (verified-query cache) - skips the LLM call entirely
+    when a repeat/near-identical question was already answered correctly before.
     """
     logger.info("Generating SQL query")
-    
+
     if state.needs_clarification:
         logger.info("Skipping SQL generation due to clarification needed")
         return state
-    
+
+    cached_sql = get_cached_sql(state.user_query)
+    if cached_sql:
+        state.sql_query = cached_sql
+        state.cache_hit = True
+        state.processing_stages_completed.append("sql_generation")
+        state.stage_details["sql_generation"] = "Reused previously verified query (cache hit)"
+        logger.info("Verified-query cache hit, skipping LLM SQL generation")
+        return state
+
     try:
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
-
-        # First, build CoT prompt
-        cot_prompt = build_cot_prompt(state.user_query, history_context)
-        
-        # Get chain-of-thought reasoning
-        cot_text = await asyncio.to_thread(
-            call_llm, cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2
-        )
-        logger.debug(f"Chain-of-thought: {cot_text[:200]}")
-        
-        # Now generate SQL with few-shot examples
         few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
-        
-        sql_text = (await asyncio.to_thread(
-            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
-        )).strip()
-        
-        # Clean up SQL (remove markdown formatting if present)
-        if "```sql" in sql_text:
-            sql_text = sql_text.split("```sql")[1].split("```")[0].strip()
-        elif "```" in sql_text:
-            sql_text = sql_text.split("```")[1].split("```")[0].strip()
-        
-        state.sql_query = sql_text
+        n_samples = max(1, int(os.getenv("SQL_SELF_CONSISTENCY_N", "3")))
+
+        if n_samples <= 1:
+            # Self-consistency disabled: single low-temperature shot, unchanged from before.
+            sql_text = _strip_sql_markdown(await asyncio.to_thread(
+                call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+            ))
+            state.sql_query = sql_text
+            first_line = sql_text.strip().splitlines()[0] if sql_text.strip() else ""
+            state.stage_details["sql_generation"] = f"{first_line[:80]}..." if len(sql_text) > 80 else first_line
+        else:
+            # Execution-guided self-consistency: sample N candidates concurrently (higher
+            # temperature for diversity), trial-execute each, and majority-vote on the
+            # normalized result - a well-evidenced small-model text-to-SQL accuracy booster
+            # (reduces schema-linking/join/logical-form errors) since it cross-checks candidates
+            # against real data instead of trusting a single generation. See INTERNAL_NOTES.md.
+            raw_candidates = await asyncio.gather(*[
+                asyncio.to_thread(
+                    call_llm, few_shot_prompt, model_alias=state.model_used,
+                    max_tokens=1024, temperature=0.4
+                )
+                for _ in range(n_samples)
+            ])
+            candidates = [_strip_sql_markdown(c) for c in raw_candidates]
+
+            groups: Dict[str, List[str]] = {}
+            first_working: Optional[str] = None
+            for sql in candidates:
+                success, result = QueryExecutor.execute(sql)
+                if not success:
+                    continue
+                if first_working is None:
+                    first_working = sql
+                sig = _result_signature(result if isinstance(result, list) else [result])
+                groups.setdefault(sig, []).append(sql)
+
+            if groups:
+                best_sig = max(groups, key=lambda s: len(groups[s]))
+                winner = groups[best_sig][0]
+                agreement = len(groups[best_sig])
+                state.stage_details["sql_generation"] = (
+                    f"Self-consistency: {agreement}/{n_samples} candidates agreed"
+                )
+                logger.info(f"Self-consistency: {agreement}/{n_samples} candidates agreed on a result")
+            else:
+                # Nothing executed - keep the first candidate; sql_repair_node gets one
+                # bounded shot at fixing it using the real error, same as the N=1 path.
+                winner = candidates[0]
+                state.stage_details["sql_generation"] = (
+                    f"Self-consistency: 0/{n_samples} candidates executed, falling through to repair"
+                )
+                logger.info("Self-consistency: no candidate executed successfully")
+
+            state.sql_query = winner
+
         state.processing_stages_completed.append("sql_generation")
-        first_line = sql_text.strip().splitlines()[0] if sql_text.strip() else ""
-        state.stage_details["sql_generation"] = f"{first_line[:80]}..." if len(sql_text) > 80 else first_line
-        logger.info(f"SQL generated: {sql_text[:100]}...")
-        
+        logger.info(f"SQL generated: {state.sql_query[:100]}...")
+
     except Exception as e:
         logger.error(f"SQL generation error: {e}")
         state.execution_error = f"SQL generation failed: {str(e)}"
-    
+
     return state
 
 
 async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantState:
     """
-    Validate SQL with both static checks and LLM validation
+    Static SQL safety/schema validation (syntax, dangerous ops, allowed tables, LIMIT cap).
+    Deliberately does NOT ask the LLM to "review" its own SQL with no error to react to -
+    see sql_repair_node, which regenerates using the real DB error instead, only if execution
+    actually fails.
     """
     if not state.sql_query or state.execution_error:
         return state
-    
+
     logger.info("Validating SQL")
-    
+
+    is_valid, validation_msg = SQLValidator.validate_query(state.sql_query)
+    if is_valid:
+        state.sql_valid = True
+        state.processing_stages_completed.append("sql_validation")
+        state.stage_details["sql_validation"] = "Passed static checks"
+    else:
+        state.sql_valid = False
+        state.sql_errors.append(validation_msg)
+        logger.warning(f"Static validation failed: {validation_msg}")
+
+    return state
+
+
+async def sql_repair_node(state: FinanceAssistantState) -> FinanceAssistantState:
+    """
+    Execution-feedback self-repair: only reached once, only after a real execution failure.
+    Feeds the actual DB error back to the model instead of asking it to blindly re-review SQL.
+    """
+    state.repair_attempted = True
+    logger.info(f"Attempting SQL repair after execution error: {state.execution_error}")
+
     try:
-        # Static validation
-        is_valid, validation_msg = SQLValidator.validate_query(state.sql_query)
-        
-        if not is_valid:
-            state.sql_valid = False
-            state.sql_errors.append(validation_msg)
-            logger.warning(f"Static validation failed: {validation_msg}")
+        repair_prompt = build_repair_prompt(state.sql_query, state.execution_error, state.user_query)
+        repaired_sql = _strip_sql_markdown(await asyncio.to_thread(
+            call_llm, repair_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.0
+        ))
+
+        is_valid, validation_msg = SQLValidator.validate_query(repaired_sql)
+        if is_valid:
+            state.sql_query = repaired_sql
+            state.sql_valid = True
+            state.execution_error = None  # clear so the retry gets a clean shot
+            state.stage_details["sql_repair"] = "Regenerated using the real DB error, re-validated"
+            logger.info("SQL repair produced a statically valid query, retrying execution")
         else:
-            # LLM-based semantic validation - the LLM may rewrite the query, so it must be
-            # re-checked with the same static safety net before being trusted for execution
-            corrected_sql = (await asyncio.to_thread(
-                call_llm, SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
-                model_alias=state.model_used, max_tokens=1024, temperature=0.0
-            )).strip()
-            
-            if "```sql" in corrected_sql:
-                corrected_sql = corrected_sql.split("```sql")[1].split("```")[0].strip()
-            elif "```" in corrected_sql:
-                corrected_sql = corrected_sql.split("```")[1].split("```")[0].strip()
-            
-            revalidated, revalidation_msg = SQLValidator.validate_query(corrected_sql)
-            if revalidated:
-                state.sql_query = corrected_sql
-                state.sql_valid = True
-                state.processing_stages_completed.append("sql_validation")
-                state.stage_details["sql_validation"] = "Passed static + LLM semantic checks (query refined)"
-                logger.info("SQL validation passed (LLM-corrected query re-verified)")
-            else:
-                # LLM's "correction" failed the safety net - keep the original query,
-                # which already passed static validation above
-                logger.warning(
-                    f"LLM-corrected SQL failed re-validation ({revalidation_msg}); "
-                    f"keeping original validated query instead"
-                )
-                state.sql_valid = True
-                state.processing_stages_completed.append("sql_validation")
-                state.stage_details["sql_validation"] = "Passed static checks (kept original query)"
-        
+            logger.warning(f"Repaired SQL failed static validation ({validation_msg}); giving up")
+
     except Exception as e:
-        logger.error(f"SQL validation error: {e}")
-        state.sql_errors.append(str(e))
-    
+        logger.error(f"SQL repair error: {e}")
+
+    state.processing_stages_completed.append("sql_repair")
     return state
 
 
@@ -341,9 +440,13 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         
         if success:
             state.query_results = result if isinstance(result, list) else [result]
+            state.execution_error = None  # clear any stale error from a pre-repair attempt
             state.processing_stages_completed.append("query_execution")
             state.stage_details["query_execution"] = f"{len(state.query_results)} row(s) returned"
             logger.info(f"Query execution successful, {len(state.query_results)} rows returned")
+            # Cache only SQL that has actually executed without error - never a failed or
+            # repaired-but-unverified query.
+            store_verified_sql(state.user_query, state.sql_query)
         else:
             state.execution_error = str(result)
             logger.error(f"Query execution failed: {result}")
@@ -549,6 +652,21 @@ def route_execution(state: FinanceAssistantState) -> str:
     return "response_formatting"
 
 
+def route_repair(state: FinanceAssistantState) -> str:
+    """After execution: on failure, repair once (execution-feedback); otherwise move on.
+    The repair attempt is capped at exactly one retry via state.repair_attempted."""
+    if state.execution_error and not state.repair_attempted:
+        return "sql_repair"
+    return "anomaly_detection"
+
+
+def route_after_repair(state: FinanceAssistantState) -> str:
+    """If repair produced a statically-valid query, retry execution once; otherwise give up."""
+    if state.sql_valid and state.execution_error is None:
+        return "query_execution"
+    return "anomaly_detection"
+
+
 # ============================================================================
 # BUILD GRAPH
 # ============================================================================
@@ -556,20 +674,21 @@ def route_execution(state: FinanceAssistantState) -> str:
 def build_finance_graph():
     """Build the LangGraph state machine"""
     graph = StateGraph(FinanceAssistantState)
-    
+
     # Add nodes
     graph.add_node("classify", classify_query_node)
     graph.add_node("clarification", clarification_node)
     graph.add_node("sql_generation", sql_generation_node)
     graph.add_node("sql_validation", sql_validation_node)
     graph.add_node("query_execution", query_execution_node)
+    graph.add_node("sql_repair", sql_repair_node)
     graph.add_node("anomaly_detection", anomaly_detection_node)
     graph.add_node("response_formatting", response_formatting_node)
     graph.add_node("export", export_node)
-    
+
     # Define edges
     graph.set_entry_point("classify")
-    
+
     graph.add_conditional_edges(
         "classify",
         route_clarification,
@@ -578,9 +697,9 @@ def build_finance_graph():
             "sql_generation": "sql_generation"
         }
     )
-    
+
     graph.add_edge("clarification", END)
-    
+
     graph.add_conditional_edges(
         "sql_generation",
         route_validation,
@@ -589,7 +708,7 @@ def build_finance_graph():
             "response_formatting": "response_formatting"
         }
     )
-    
+
     graph.add_conditional_edges(
         "sql_validation",
         route_execution,
@@ -598,12 +717,29 @@ def build_finance_graph():
             "response_formatting": "response_formatting"
         }
     )
-    
-    graph.add_edge("query_execution", "anomaly_detection")
+
+    graph.add_conditional_edges(
+        "query_execution",
+        route_repair,
+        {
+            "sql_repair": "sql_repair",
+            "anomaly_detection": "anomaly_detection"
+        }
+    )
+
+    graph.add_conditional_edges(
+        "sql_repair",
+        route_after_repair,
+        {
+            "query_execution": "query_execution",
+            "anomaly_detection": "anomaly_detection"
+        }
+    )
+
     graph.add_edge("anomaly_detection", "response_formatting")
     graph.add_edge("response_formatting", "export")
     graph.add_edge("export", END)
-    
+
     return graph.compile()
 
 

@@ -188,3 +188,5 @@ docker-compose.override.yml
 # Keep only essential files
 !.env.example
 !.gitignore
+/trellis-main/
+/cfo-stack-main/

@@ -107,7 +107,7 @@ export default function Home() {
         body: JSON.stringify({
           session_id: sessionId,
           message: userMessage,
-          model: 'amazon.nova-micro', // AWS Bedrock; can be made selectable
+          model: 'qwen2.5-coder-1.5b', // local/vLLM Qwen2.5-Coder-1.5B-Instruct; AWS Bedrock kept as fallback alias
         }),
       });
 

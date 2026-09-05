@@ -1,13 +1,19 @@
 """
 Benchmarking Suite for TBX Finance Assistant
-Test different models against diverse TBX financial data questions
+Execution-verified accuracy of Qwen2.5-Coder-1.5B-Instruct against the TBX schema: "qwen-baseline"
+(single-shot, the real production few-shot prompt from backend/prompts.py, no self-consistency,
+no repair) vs "qwen-full-pipeline" (same prompt + execution-guided self-consistency sampling +
+the execution-feedback repair loop - see backend/langgraph_flow.py), so the ablation shows the
+real contribution of today's accuracy work rather than just eyeballing a single number.
 """
 
+import argparse
 import json
+import sys
+import threading
 import time
 import logging
 import re
-import urllib.request
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
@@ -15,15 +21,30 @@ import statistics
 import os
 from dotenv import load_dotenv
 
-import boto3
+import httpx
 import duckdb
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "backend"))
+from prompts import build_few_shot_prompt  # the real production prompt, not a benchmark-only copy
 
-# AWS Bedrock Nova Micro: 1.3B parameters, PS Section 7 compliant (<=20B params)
-NOVA_MICRO_MODEL_ID = "amazon.nova-micro-v1:0"
+# TBX table -> {column: DuckDB type}, matching the DDL in "TBX - Database Schema.md"
+# (kept as a local copy rather than importing backend/database.py, so this script has no
+# dependency on the backend package or its sys.path).
+TABLE_COLUMNS = {
+    "bank": {"bank_code": "VARCHAR", "bank_name": "VARCHAR"},
+    "account": {
+        "account_id": "VARCHAR", "entity_id": "VARCHAR", "account_number": "VARCHAR",
+        "program_id": "INTEGER", "available_balance": "DECIMAL(18,2)", "bank_code": "VARCHAR",
+    },
+    "transaction": {
+        "transaction_id": "VARCHAR", "account_id": "VARCHAR", "transaction_date": "TIMESTAMP",
+        "transaction_type": "VARCHAR", "description": "VARCHAR", "transaction_amount": "DECIMAL(18,2)",
+        "transaction_reference_id": "VARCHAR", "utr_number": "VARCHAR",
+    },
+}
 
 _DANGEROUS_SQL = re.compile(
     r"\b(DROP|DELETE|UPDATE|INSERT|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|ATTACH|COPY|PRAGMA)\b",
@@ -53,18 +74,62 @@ def is_sql_safe(sql: str) -> bool:
     return bool(sql) and sql.strip().lower().startswith("select") and not _DANGEROUS_SQL.search(sql)
 
 
-def build_benchmark_db() -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with TBX schema (bank, account, transaction) for execution scoring."""
+QUERY_TIMEOUT_SECONDS = float(os.getenv("QUERY_TIMEOUT_SECONDS", "15"))
+
+
+def _execute_with_timeout(con: duckdb.DuckDBPyConnection, sql: str) -> Tuple[List[Tuple], List[str]]:
+    """Hard-cancel a query that runs past QUERY_TIMEOUT_SECONDS via con.interrupt() on a
+    background thread. Found necessary the hard way while benchmarking: a self-join with an
+    OR join condition took 938s and ~15GB before DuckDB itself gave up with an OOM error on
+    just 500K rows (see backend/database.py, backend/sql_validator.py's matching guards)."""
+    outcome: Dict[str, Any] = {}
+
+    def run():
+        try:
+            cursor = con.execute(sql)
+            outcome["rows"] = cursor.fetchall()
+            outcome["cols"] = [d[0] for d in cursor.description] if cursor.description else []
+        except Exception as e:
+            outcome["error"] = e
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=QUERY_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        con.interrupt()
+        thread.join(timeout=5)
+        raise TimeoutError(f"Query exceeded {QUERY_TIMEOUT_SECONDS}s and was cancelled")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("rows", []), outcome.get("cols", [])
+
+
+def _result_signature(rows: List[Tuple], cols: List[str]) -> str:
+    """Order-independent signature of a query result, for self-consistency majority voting
+    (mirrors backend/langgraph_flow.py's _result_signature, over raw DuckDB tuples here)."""
+    normalized = sorted(tuple(sorted(zip(cols, (str(v) for v in row)))) for row in rows)
+    return str(normalized)
+
+
+def build_benchmark_db(data_dir: Path) -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB with TBX schema (bank, account, transaction), typed to match the DDL
+    in "TBX - Database Schema.md" - real DECIMAL/TIMESTAMP/INTEGER, not ALL_VARCHAR, so the
+    benchmark reflects what the model actually has to write against."""
     con = duckdb.connect(database=":memory:")
-    for table in ["bank", "account", "transaction"]:
-        csv_path = DATA_DIR / f"{table}.csv"
+    for table, columns in TABLE_COLUMNS.items():
+        csv_path = data_dir / f"{table}.csv"
         if csv_path.exists():
-            con.execute(f"CREATE VIEW {table} AS SELECT * FROM read_csv_auto('{csv_path.as_posix()}', ALL_VARCHAR=TRUE)")
+            con.execute(
+                f"CREATE VIEW {table} AS SELECT * FROM read_csv('{csv_path.as_posix()}', columns={columns})"
+            )
         else:
             print(f"Warning: {csv_path} not found, skipping table {table}")
     return con
 
-# System prompt reused from backend/prompts.py so the benchmark reflects real grounding behavior
+# Used only for the repair call and the (currently untested) multiturn/clarification path -
+# the main SQL-generation call uses backend/prompts.py's build_few_shot_prompt directly (the
+# real production prompt), not this copy.
 SQL_SYSTEM_PROMPT = """You are an expert SQL developer for TBX financial data analysis.
 Convert natural language questions into precise DuckDB SQL queries.
 
@@ -78,27 +143,27 @@ account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
 - entity_id (VARCHAR): Entity/customer ID (UUID)
 - account_number (VARCHAR): Account number (SENSITIVE - mask in output)
-- program_id (VARCHAR): Program ID (0, 4, 21, 46, 99)
-- available_balance (VARCHAR): Balance (can be negative, zero, or extreme values)
+- program_id (INTEGER): Program ID (0, 4, 21, 46, 99)
+- available_balance (DECIMAL): Balance (can be negative, zero, or extreme values) - already numeric, no CAST needed
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
 
 transaction:
 - transaction_id (VARCHAR, PRIMARY KEY): Unique transaction ID (UUID)
 - account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
-- transaction_date (VARCHAR): Timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_date (TIMESTAMP): Transaction timestamp - already a real timestamp, no CAST needed
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description
-- transaction_amount (VARCHAR): Amount (can be 0.00, extreme values, etc.)
-- transaction_reference_id (VARCHAR): Reference number (often empty, can be duplicated)
-- utr_number (VARCHAR): UTR (often empty, encrypted, or plaintext)
+- transaction_amount (DECIMAL): Amount (can be 0.00, extreme values, etc.) - already numeric, no CAST needed
+- transaction_reference_id (VARCHAR): Reference number (often NULL, can be duplicated)
+- utr_number (VARCHAR): UTR (often NULL, encrypted, or plaintext)
 
 RULES:
 1. Use date filters ONLY when the question explicitly mentions a time period.
 2. Join tables only when necessary (e.g., JOIN bank ON account.bank_code = bank.bank_code).
 3. Use SUM/COUNT/AVG/MIN/MAX for aggregations.
-4. Cast numeric columns: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL).
+4. All numeric and date columns are already properly typed - never wrap them in CAST(... AS DECIMAL).
 5. Filter transaction_type using ONLY 'credit' or 'debit' (case-sensitive).
-6. Handle NULL/empty fields: use '' for empty strings.
+6. A missing reference/UTR is a real SQL NULL - check with IS NULL / IS NOT NULL, never "= ''".
 7. Assume 'today' is 2026-09-05 for relative date phrases like 'last month'.
 8. Always include ID columns (account_id, transaction_id) in SELECT for unique identification.
 
@@ -127,7 +192,7 @@ TEST_QUESTIONS = {
             "complexity": "easy",
             "type": "total_spend",
             "answer_type": "scalar",
-            "reference_sql": "SELECT SUM(CAST(transaction_amount AS DECIMAL)) AS total FROM transaction WHERE transaction_date >= '2026-06-01' AND transaction_date < '2026-07-01'"
+            "reference_sql": "SELECT SUM(transaction_amount) AS total FROM transaction WHERE transaction_type = 'debit' AND transaction_date >= '2026-06-01' AND transaction_date < '2026-07-01'"
         },
         {
             "id": "easy_002",
@@ -146,7 +211,7 @@ TEST_QUESTIONS = {
             "type": "negative_balance_accounts",
             "answer_type": "list",
             "id_column": "account_id",
-            "reference_sql": "SELECT account_id, available_balance FROM account WHERE CAST(available_balance AS DECIMAL) < 0"
+            "reference_sql": "SELECT account_id, available_balance FROM account WHERE available_balance < 0"
         },
         {
             "id": "easy_004",
@@ -178,7 +243,7 @@ TEST_QUESTIONS = {
             "type": "bank_breakdown",
             "answer_type": "list",
             "id_column": "bank_code",
-            "reference_sql": "SELECT b.bank_code, b.bank_name, SUM(CAST(t.transaction_amount AS DECIMAL)) AS total FROM account a JOIN bank b ON a.bank_code = b.bank_code JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
+            "reference_sql": "SELECT b.bank_code, b.bank_name, SUM(t.transaction_amount) AS total FROM account a JOIN bank b ON a.bank_code = b.bank_code JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
         },
         {
             "id": "mod_002",
@@ -188,7 +253,7 @@ TEST_QUESTIONS = {
             "type": "avg_by_type",
             "answer_type": "list",
             "id_column": "transaction_type",
-            "reference_sql": "SELECT transaction_type, AVG(CAST(transaction_amount AS DECIMAL)) AS avg_amount, COUNT(*) as count FROM transaction GROUP BY transaction_type"
+            "reference_sql": "SELECT transaction_type, AVG(transaction_amount) AS avg_amount, COUNT(*) as count FROM transaction GROUP BY transaction_type"
         },
         {
             "id": "mod_003",
@@ -198,7 +263,7 @@ TEST_QUESTIONS = {
             "type": "top_transactions",
             "answer_type": "list",
             "id_column": "transaction_id",
-            "reference_sql": "SELECT transaction_id, transaction_amount, transaction_date FROM transaction ORDER BY CAST(transaction_amount AS DECIMAL) DESC LIMIT 5"
+            "reference_sql": "SELECT transaction_id, transaction_amount, transaction_date FROM transaction ORDER BY transaction_amount DESC LIMIT 5"
         },
         {
             "id": "mod_004",
@@ -208,7 +273,7 @@ TEST_QUESTIONS = {
             "type": "program_breakdown",
             "answer_type": "list",
             "id_column": "program_id",
-            "reference_sql": "SELECT program_id, COUNT(*) AS account_count, SUM(CAST(available_balance AS DECIMAL)) AS total_balance FROM account GROUP BY program_id"
+            "reference_sql": "SELECT program_id, COUNT(*) AS account_count, SUM(available_balance) AS total_balance FROM account GROUP BY program_id"
         },
         {
             "id": "mod_005",
@@ -217,7 +282,7 @@ TEST_QUESTIONS = {
             "complexity": "moderate",
             "type": "missing_fields",
             "answer_type": "scalar",
-            "reference_sql": "SELECT COUNT(*) AS missing_utr_count FROM transaction WHERE utr_number = ''"
+            "reference_sql": "SELECT COUNT(*) AS missing_utr_count FROM transaction WHERE utr_number IS NULL"
         }
     ],
     
@@ -230,7 +295,7 @@ TEST_QUESTIONS = {
             "type": "bank_analysis",
             "answer_type": "list",
             "id_column": "bank_code",
-            "reference_sql": "SELECT b.bank_code, b.bank_name, COUNT(DISTINCT a.account_id) AS account_count, AVG(CAST(a.available_balance AS DECIMAL)) AS avg_balance, SUM(CAST(t.transaction_amount AS DECIMAL)) AS total_transactions FROM account a JOIN bank b ON a.bank_code = b.bank_code LEFT JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
+            "reference_sql": "SELECT b.bank_code, b.bank_name, COUNT(DISTINCT a.account_id) AS account_count, AVG(a.available_balance) AS avg_balance, SUM(t.transaction_amount) AS total_transactions FROM account a JOIN bank b ON a.bank_code = b.bank_code LEFT JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
         },
         {
             "id": "complex_002",
@@ -240,7 +305,7 @@ TEST_QUESTIONS = {
             "type": "extreme_balances",
             "answer_type": "list",
             "id_column": "account_id",
-            "reference_sql": "SELECT a.account_id, CAST(a.available_balance AS DECIMAL) AS balance, COUNT(t.transaction_id) AS txn_count FROM account a LEFT JOIN transaction t ON a.account_id = t.account_id WHERE ABS(CAST(a.available_balance AS DECIMAL)) > 100000000 GROUP BY a.account_id, a.available_balance"
+            "reference_sql": "SELECT a.account_id, a.available_balance AS balance, COUNT(t.transaction_id) AS txn_count FROM account a LEFT JOIN transaction t ON a.account_id = t.account_id WHERE ABS(a.available_balance) > 100000000 GROUP BY a.account_id, a.available_balance"
         },
         {
             "id": "complex_003",
@@ -250,7 +315,7 @@ TEST_QUESTIONS = {
             "type": "micro_transactions",
             "answer_type": "list",
             "id_column": "transaction_type",
-            "reference_sql": "SELECT transaction_type, CAST(transaction_amount AS DECIMAL) as amount, COUNT(*) as count FROM transaction WHERE CAST(transaction_amount AS DECIMAL) <= 0.01 GROUP BY transaction_type, CAST(transaction_amount AS DECIMAL)"
+            "reference_sql": "SELECT transaction_type, transaction_amount as amount, COUNT(*) as count FROM transaction WHERE transaction_amount <= 0.01 GROUP BY transaction_type, transaction_amount"
         },
         {
             "id": "complex_004",
@@ -270,7 +335,7 @@ TEST_QUESTIONS = {
             "type": "duplicate_references",
             "answer_type": "list",
             "id_column": "reference_id",
-            "reference_sql": "SELECT transaction_reference_id, COUNT(DISTINCT account_id) AS account_count, COUNT(*) AS total_count FROM transaction WHERE transaction_reference_id != '' GROUP BY transaction_reference_id HAVING COUNT(DISTINCT account_id) > 1"
+            "reference_sql": "SELECT transaction_reference_id, COUNT(DISTINCT account_id) AS account_count, COUNT(*) AS total_count FROM transaction WHERE transaction_reference_id IS NOT NULL GROUP BY transaction_reference_id HAVING COUNT(DISTINCT account_id) > 1"
         }
     ]
 }
@@ -280,32 +345,24 @@ TEST_QUESTIONS = {
 # ============================================================================
 
 class BenchmarkRunner:
-    """Run benchmarks against different models"""
-    
-    def __init__(self, output_dir: str = "."):
+    """Execution-verified accuracy of Qwen2.5-Coder-1.5B-Instruct, run twice per question:
+    once as a plain single-shot SQL generation ("baseline"), once with the execution-feedback
+    repair loop from backend/langgraph_flow.py enabled ("with_repair") - the two "model" rows
+    in the report are really the same model under these two pipeline configurations, which is
+    the concrete before/after evidence for the repair loop's contribution."""
+
+    def __init__(self, output_dir: str = ".", data_dir: Optional[Path] = None):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        
+
         load_dotenv()
-        # Model lineup: PS Section 7 caps parameter count at <=20B ("not a suggestion").
-        # Amazon Nova Micro: 1.3B parameters, AWS-native Bedrock model, PS-compliant
-        # Alternative models for benchmarking (all <=20B params)
-        self.models = {
-            "amazon.nova-micro": os.getenv("NOVA_MICRO_MODEL_ID", "amazon.nova-micro-v1:0"),  # DEFAULT, PS-compliant (1.3B)
-            "llama3-1-8b": os.getenv("LLAMA_8B_MODEL_ID", "meta.llama3-1-8b-instruct-v1:0"),
-            "mistral-7b": os.getenv("MISTRAL_7B_MODEL_ID", "mistral.mistral-7b-instruct-v0:2"),
-            "llama4-scout-17b": os.getenv("LLAMA_SCOUT_17B_MODEL_ID", "meta.llama4-scout-17b-instruct-v1:0"),
-        }
-        self.bedrock = boto3.client(
-            "bedrock-runtime",
-            region_name=os.getenv("AWS_REGION", "us-east-1"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        )
+        # PS Section 7 caps parameter count at <=20B ("not a suggestion"); Qwen2.5-Coder-1.5B
+        # is well under that. Both variants below hit the same model/endpoint.
+        self.models = {"qwen-baseline": "single-shot", "qwen-full-pipeline": "self-consistency+repair"}
 
         # Execution-based scoring: run generated SQL against the real dataset and
         # compare against a precomputed reference result (ground truth).
-        self.db = build_benchmark_db()
+        self.db = build_benchmark_db(data_dir or (REPO_ROOT / "data"))
         # Build bank_code to bank_name mapping for TBX schema
         self.bank_code_to_name = {
             code: name
@@ -509,9 +566,7 @@ class BenchmarkRunner:
             return outcome
 
         try:
-            cursor = self.db.execute(sql)
-            cand_rows = cursor.fetchall()
-            cand_cols = [d[0] for d in cursor.description] if cursor.description else []
+            cand_rows, cand_cols = _execute_with_timeout(self.db, sql)
         except Exception as e:
             outcome["execution_error"] = str(e)[:200]
             return outcome
@@ -539,39 +594,116 @@ class BenchmarkRunner:
 
         return outcome
 
-    def _call_model(self, model_name: str, model_id: str, system_prompt: str,
+    def _call_model(self, model_name: str, model_id: str, system_prompt: Optional[str],
                     messages: List[Dict[str, str]], max_tokens: int = 512,
                     temperature: float = 0.2) -> str:
-        """Call AWS Bedrock model and return response.
-        messages: ordered list of {"role": "user"|"assistant", "content": str}"""
-        response = self.bedrock.converse(
-            modelId=model_id,
-            system=[{"text": system_prompt}],
-            messages=[{"role": m["role"], "content": [{"text": m["content"]}]} for m in messages],
-            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
-        )
-        return response["output"]["message"]["content"][0]["text"]
+        """Call the local/vLLM-served Qwen2.5-Coder-1.5B via the OpenAI-compatible chat
+        completions API (same client shape as backend/langgraph_flow.py's call_llm).
+        messages: ordered list of {"role": "user"|"assistant", "content": str}.
+        system_prompt=None matches production's SQL-generation call, which sends the whole
+        few-shot prompt as a single user message with no separate system role."""
+        base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+        llm_model_name = os.getenv("LLM_MODEL_NAME", "qwen2.5-coder:1.5b-instruct")
 
-    def _test_single_question(self, model_name: str, 
+        full_messages = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + messages
+        response = httpx.post(
+            f"{base_url}/chat/completions",
+            json={
+                "model": llm_model_name,
+                "messages": full_messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+
+    def _generate_and_execute(self, model_name: str, model_id: str, question_text: str,
+                             temperature: float) -> Tuple[str, str, bool, List[Tuple], List[str]]:
+        """One LLM call using the real production few-shot prompt -> (response_text,
+        extracted_sql, executed, result_rows, result_cols). `executed` distinguishes a
+        legitimate zero-row result from "didn't run" for self-consistency voting."""
+        prompt = build_few_shot_prompt(question_text)
+        result_text = self._call_model(
+            model_name, model_id, None, [{"role": "user", "content": prompt}],
+            max_tokens=512, temperature=temperature,
+        )
+        sql = extract_sql(result_text)
+        if sql and is_sql_safe(sql):
+            try:
+                rows, cols = _execute_with_timeout(self.db, sql)
+                return result_text, sql, True, rows, cols
+            except Exception:
+                pass
+        return result_text, sql, False, [], []
+
+    def _test_single_question(self, model_name: str,
                              question: Dict[str, Any]) -> Dict[str, Any]:
-        """Test model on single question"""
+        """Test one question with the real production few-shot prompt. model_name selects the
+        pipeline variant (see class docstring): "qwen-full-pipeline" samples N candidates and
+        majority-votes on the executed result (self-consistency), then gets one
+        execution-feedback repair attempt if nothing executed - matching
+        backend/langgraph_flow.py's sql_generation_node + sql_repair_node. "qwen-baseline" is a
+        single low-temperature shot, no self-consistency, no repair."""
         start_time = time.time()
         model_id = self.models[model_name]
+        use_full_pipeline = model_name == "qwen-full-pipeline"
 
         if question.get("multiturn"):
             return self._test_multiturn_question(model_name, model_id, question, start_time)
 
         try:
-            result_text = self._call_model(
-                model_name, model_id, SQL_SYSTEM_PROMPT,
-                [{"role": "user", "content": question["question"]}],
-                max_tokens=512, temperature=0.2,
-            )
-            latency = (time.time() - start_time) * 1000
+            repaired = False
+            n_samples = 3 if use_full_pipeline else 1
+            temperature = 0.4 if use_full_pipeline else 0.1
 
-            # Execution-based scoring: actually run the generated SQL against real data
-            extracted_sql = extract_sql(result_text)
+            candidates = [
+                self._generate_and_execute(model_name, model_id, question["question"], temperature)
+                for _ in range(n_samples)
+            ]
+
+            groups: Dict[str, List[Tuple[str, str, List[Tuple], List[str]]]] = {}
+            first_executed = None
+            for result_text, sql, executed, rows, cols in candidates:
+                if not executed:
+                    continue
+                if first_executed is None:
+                    first_executed = (result_text, sql, rows, cols)
+                sig = _result_signature(rows, cols)
+                groups.setdefault(sig, []).append((result_text, sql, rows, cols))
+
+            if groups:
+                best_sig = max(groups, key=lambda s: len(groups[s]))
+                result_text, extracted_sql, cand_rows, cand_cols = groups[best_sig][0]
+                agreement = f"{len(groups[best_sig])}/{n_samples}"
+            else:
+                # nothing executed - fall back to the first candidate's text/SQL for repair
+                result_text, extracted_sql = candidates[0][0], candidates[0][1]
+                cand_rows, cand_cols = [], []
+                agreement = f"0/{n_samples}"
+
             execution_result = self._score_execution(extracted_sql, question)
+
+            if use_full_pipeline and execution_result.get("execution_error"):
+                repair_prompt = (
+                    f"This SQL query failed when run against the real database:\n\n{extracted_sql}\n\n"
+                    f"Database error:\n{execution_result['execution_error']}\n\n"
+                    f"Fix the query so it runs successfully and still answers the original "
+                    f"question: \"{question['question']}\"\n\n"
+                    "Return ONLY the corrected SQL query, nothing else."
+                )
+                repair_text = self._call_model(
+                    model_name, model_id, SQL_SYSTEM_PROMPT,
+                    [{"role": "user", "content": repair_prompt}],
+                    max_tokens=512, temperature=0.0,
+                )
+                repaired_sql = extract_sql(repair_text)
+                repaired_result = self._score_execution(repaired_sql, question)
+                if repaired_result.get("sql_executed"):
+                    extracted_sql, execution_result, repaired = repaired_sql, repaired_result, True
+
+            latency = (time.time() - start_time) * 1000
 
             # Score the response (uses the executed/verified result when ground truth exists)
             accuracy = self._score_accuracy(result_text, question, execution_result)
@@ -584,6 +716,8 @@ class BenchmarkRunner:
                 "complexity": question["complexity"],
                 "model": model_name,
                 "response": result_text[:500],  # Truncate for storage
+                "self_consistency_agreement": agreement,
+                "repaired": repaired,
                 "latency_ms": latency,
                 "accuracy_score": accuracy,
                 "grounding_score": grounding,
@@ -819,8 +953,17 @@ class BenchmarkRunner:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
-    runner = BenchmarkRunner()
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dataset", choices=["small", "large"], default="small",
+        help="small = data/ (hand-verified 10-row reference set); "
+             "large = data/large/ (10K accounts / 500K transactions, scale spot-check)",
+    )
+    args = parser.parse_args()
+    data_dir = REPO_ROOT / "data" / "large" if args.dataset == "large" else REPO_ROOT / "data"
+
+    runner = BenchmarkRunner(data_dir=data_dir)
     results = runner.run_full_benchmark()
     
     # Print report

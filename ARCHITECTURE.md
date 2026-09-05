@@ -13,8 +13,8 @@ This document provides a comprehensive guide to the TBX Finance Assistant implem
 - ✅ Accurate computation (SQL execution before LLM formatting)
 - ✅ Verifiable answers (Results table + Grounding Info)
 - ✅ Hallucination guardrails (Confidence scoring, data validation)
-- ✅ Lightweight model constraint (Amazon Nova Micro: 1.3B params, PS Section 7 compliant)
-- ✅ Multi-turn conversation (Redis sessions, context compression)
+- ✅ Lightweight model constraint (Qwen2.5-Coder-1.5B-Instruct: 1.5B params, PS Section 7 compliant; see [INTERNAL_NOTES.md](INTERNAL_NOTES.md))
+- ✅ Multi-turn conversation (session context compression; see [INTERNAL_NOTES.md](INTERNAL_NOTES.md) for the current session-storage mechanism)
 - ✅ Explainability (Show SQL, data pulled, grounding info)
 
 **Good to Have:**
@@ -47,16 +47,15 @@ This document provides a comprehensive guide to the TBX Finance Assistant implem
 
 ### 2. LLM Integration Layer
 
-#### AWS Bedrock + Amazon Nova Micro (1.3B params, PS Section 7 compliant)
-- **Amazon Nova Micro**: 1.3B parameters, optimized for low-latency financial queries
-- Runs exclusively via AWS Bedrock `converse` API
-- Alternative models available for benchmarking: Llama 3.1-8B, Mistral-7B, Llama Scout-17B (all <=20B params)
+#### Qwen2.5-Coder-1.5B-Instruct (1.5B params, PS Section 7 compliant)
+- **Qwen2.5-Coder-1.5B-Instruct**: 1.5B parameters, coder-tuned, served via an OpenAI-compatible
+  `/v1/chat/completions` endpoint (local Ollama for dev, vLLM on GCP for production - same client)
+- **Fallback**: AWS Bedrock (Nova Micro, Llama 3.1-8B, Mistral-7B, Llama Scout-17B - all <=20B params) via the same `model_alias` switch
 
 #### Prompt Engineering (`backend/prompts.py`)
-- **Few-shot Examples**: 5 diverse SQL examples in system prompt
-- **Chain-of-Thought**: LLM explains reasoning before SQL
+- **Few-shot Examples**: 6 diverse SQL examples in system prompt
 - **Classification Prompt**: Parse intent, entities, filters, confidence
-- **Validation Prompt**: LLM validates and corrects SQL
+- **Repair Prompt**: execution-feedback self-repair - the real DB error is fed back for one bounded regeneration attempt (see [INTERNAL_NOTES.md](INTERNAL_NOTES.md) §3)
 - **Response Template**: Format answer with confidence + grounding
 
 ---
@@ -250,16 +249,18 @@ Downside: Requires good LLM SQL generation
 Mitigation: Few-shot examples + validation
 ```
 
-### 2. **Lightweight Models (Amazon Nova Micro primary)**
+### 2. **Lightweight Models (Qwen2.5-Coder-1.5B-Instruct primary)**
 ```
-Selected: Amazon Nova Micro (1.3B params, AWS Bedrock native)
+Selected: Qwen2.5-Coder-1.5B-Instruct (1.5B params, OpenAI-compatible endpoint)
 
 Design Rationale:
 ✓ Fully compliant with Problem Statement Section 7 (<=20B params constraint)
-✓ 1.3B parameters: minimal latency, optimal cost-efficiency
-✓ AWS-native optimizations for AWS Bedrock
-✓ Excellent performance on structured financial data tasks (SQL generation, classification)
-✓ Low-latency inference: designed for sub-second responses
+✓ Coder-tuned: this task is narrow (SQL generation + result explanation), where a small
+  coder-tuned model is competitive with much larger general models
+✓ Portable serving: local Ollama for dev, vLLM on GCP for production - same client code
+✓ Paired with execution-feedback repair + real column types + a verified-query cache for
+  accuracy, rather than relying on raw model scale (see INTERNAL_NOTES.md §3-4)
+✓ AWS Bedrock kept as a fallback via the same model_alias switch
 ```
 
 ### 3. **Hybrid Anomaly Detection**
@@ -370,27 +371,23 @@ curl -X POST http://localhost:8000/chat \
   -d '{
     "session_id": "...",
     "message": {"content": "What is the total transaction volume by account?"},
-    "model": "amazon.nova-micro"
+    "model": "qwen2.5-coder-1.5b"
   }'
 ```
 
 ---
 
-## Performance Targets (measured via AWS Bedrock `converse` API)
+## Performance (measured via the OpenAI-compatible `/v1/chat/completions` endpoint)
 
-### Latency (Amazon Nova Micro)
-- Query Classification: 10-50ms
-- SQL Generation: ~400-600ms (Nova Micro optimized for low-latency)
-- SQL Validation: 10-30ms
-- Query Execution: 20-50ms
-- Response Formatting: 5-10ms
-- **Total: ~500-750ms avg** (measured via Bedrock `converse` API)
+See [INTERNAL_NOTES.md](INTERNAL_NOTES.md) §4 for the full, current numbers (measured against a
+live Qwen2.5-Coder-1.5B-Instruct deployment) and an honest read of what's a real effect vs
+run-to-run variance. Summary, small dataset:
 
-### Accuracy Targets (execution-verified)
-- Easy Questions: 70%+ (Nova Micro baseline)
-- Moderate Questions: 75%+ (Nova Micro on structured financial data)
-- Complex Questions: 70%+ (Nova Micro with multi-table joins)
-- Overall: 72%+ (execution-verified: SQL extracted and run against real DuckDB data)
+### Accuracy (execution-verified)
+- Easy Questions: 100%
+- Moderate Questions: 80%
+- Complex Questions: 46.7%
+- Overall: 75.6% (execution-verified: SQL extracted and run against real DuckDB data)
 
 ### Grounding Targets (measured)
 - Data completeness (grounding score): 80%+
@@ -489,7 +486,7 @@ This implementation provides a **production-quality prototype** of a conversatio
 6. ✅ **Grounds** answers (shows data provenance)
 7. ✅ **Exports** results (CSV breakdown)
 8. ✅ **Scales** across sessions (Redis management)
-9. ✅ **Benchmarks** models live (Amazon Nova Micro as default, alternatives available)
+9. ✅ **Benchmarks** live (Qwen2.5-Coder-1.5B-Instruct as default, AWS Bedrock models available as fallback)
 
 **Primary Design Principle**: Accuracy through grounding, not raw model size.
 

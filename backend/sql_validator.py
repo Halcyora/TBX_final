@@ -56,10 +56,33 @@ class SQLValidator:
         valid_cols, col_msg = SQLValidator._check_basic_columns(sql)
         if not valid_cols:
             return False, f"Column validation warning: {col_msg}"
-        
+
+        # 5. Check for OR-condition joins (pathological at scale)
+        cheap_join, join_msg = SQLValidator._check_join_cost(sql)
+        if not cheap_join:
+            return False, f"Query cost check failed: {join_msg}"
+
         logger.info("SQL query passed all validation checks")
         return True, "Query is valid"
-    
+
+    @staticmethod
+    def _check_join_cost(sql: str) -> Tuple[bool, str]:
+        """Reject a JOIN whose ON clause contains OR - found the hard way: a self-join on
+        "ref_id = ref_id OR utr = utr" can't use a hash join, degenerates toward a cross
+        product, and took 938s + 15GB before DuckDB itself gave up with an OOM error on just
+        500K rows. At the 20M-row hackathon scale that's not survivable. Two separate equi-joins
+        combined with UNION is the fix, and the error message says so for the repair loop."""
+        for on_clause in re.findall(r'\bON\b(.*?)(?=\bJOIN\b|\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|$)',
+                                     sql, re.IGNORECASE | re.DOTALL):
+            if re.search(r'\bOR\b', on_clause, re.IGNORECASE):
+                return False, (
+                    "JOIN ... ON with OR produces a non-equi join that can degenerate into a "
+                    "cross product at scale - rewrite as two separate equi-joins combined with "
+                    "UNION instead, one per OR'd condition"
+                )
+        return True, ""
+
+
     @staticmethod
     def _check_syntax(sql: str) -> Tuple[bool, str]:
         """Check basic SQL syntax"""
