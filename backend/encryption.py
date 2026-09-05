@@ -109,9 +109,9 @@ class AccountEncryption:
             show_last_n: Number of last digits to show
             
         Returns:
-            Masked account number (e.g., "****13729069")
+            Masked account number (e.g., "XXXXXXXX5667")
         """
         if len(account_number) <= show_last_n:
-            return "*" * len(account_number)
+            return "X" * len(account_number)
         
-        return "*" * (len(account_number) - show_last_n) + account_number[-show_last_n:]
+        return "X" * (len(account_number) - show_last_n) + account_number[-show_last_n:]

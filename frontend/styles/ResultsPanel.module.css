@@ -148,23 +148,33 @@
 }
 
 .stepItem {
-  padding: 0.35rem 0.6rem;
+  padding: 0.5rem 0.6rem;
   font-size: 0.82rem;
   color: #333;
-  border-left: 2px solid #d4edda;
-  margin-bottom: 0.15rem;
+  border-left: 3px solid #155724;
+  margin-bottom: 0.5rem;
+  background: #f9f9f9;
+  border-radius: 3px;
 }
 
 .stepHeader {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-weight: 500;
 }
 
 .stepDetail {
-  margin: 0.15rem 0 0 1.25rem;
-  font-size: 0.76rem;
-  color: #777;
+  margin: 0.35rem 0 0 1.5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  color: #555;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .stepCheck {
@@ -285,10 +295,19 @@
   min-width: 100px;
 }
 
+.masked {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #666;
+  flex: 1;
+}
+
 .decrypted {
   font-weight: 600;
   color: #155724;
   font-family: monospace;
+  font-size: 0.85rem;
 }
 
 .decryptBtn {

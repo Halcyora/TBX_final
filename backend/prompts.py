@@ -27,7 +27,9 @@ account:
 transaction:
 - transaction_id (VARCHAR, PRIMARY KEY): Unique transaction identifier (UUID)
 - account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
-- transaction_date (VARCHAR): Transaction timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_date (VARCHAR): Transaction timestamp in ISO 8601 format (YYYY-MM-DDTHH:MM:SS.microseconds). 
+  IMPORTANT: When users ask about "transaction date" without specifying time, extract DATE only: CAST(transaction_date AS DATE) or DATE(transaction_date)
+  Example: "What is the most common transaction date?" → GROUP BY CAST(transaction_date AS DATE), not the full timestamp
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description (can contain special chars, quotes, slashes)
 - transaction_amount (VARCHAR): Amount (can be 0.00, micro amounts, or extreme values)
@@ -37,7 +39,11 @@ transaction:
 IMPORTANT RULES:
 1. Add a DATE FILTER only when the user's question explicitly mentions a time period (last month, Q3, 2026, etc).
    If no time period is mentioned, return results across ALL dates in the dataset.
-2. JOIN tables only when necessary:
+2. CRITICAL - DATE vs DATETIME: transaction_date contains full ISO 8601 datetime (YYYY-MM-DDTHH:MM:SS.microseconds).
+   When users ask about "transaction date" or "dates" without mentioning time, extract DATE ONLY using CAST(transaction_date AS DATE).
+   Example: "What is the most common transaction date?" → GROUP BY CAST(transaction_date AS DATE), NOT the full timestamp.
+   This ensures grouping by calendar date, not by each unique datetime combination.
+3. JOIN tables only when necessary:
    - To get bank names: JOIN bank ON account.bank_code = bank.bank_code
    - To get account details: JOIN account ON transaction.account_id = account.account_id
    - Never JOIN unnecessarily - keep queries simple.
@@ -152,6 +158,17 @@ LEFT JOIN transaction t ON a.account_id = t.account_id
 JOIN bank b ON a.bank_code = b.bank_code
 GROUP BY a.account_id, a.account_number, b.bank_name
 ORDER BY avg_amount DESC"""
+    },
+    {
+        "question": "What is the most common transaction date?",
+        "reasoning": "The user asks about 'transaction date' without specifying time. transaction_date contains full ISO datetime (YYYY-MM-DDTHH:MM:SS.microseconds). Extract DATE only using CAST(transaction_date AS DATE). Group by date and count to find most common.",
+        "sql": """SELECT 
+    CAST(transaction_date AS DATE) as transaction_date,
+    COUNT(transaction_id) as transaction_count
+FROM transaction
+GROUP BY CAST(transaction_date AS DATE)
+ORDER BY transaction_count DESC
+LIMIT 10"""
     }
 ]
 

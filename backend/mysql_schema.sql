@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS bank (
 CREATE TABLE IF NOT EXISTS account (
     account_id         VARCHAR(36)  PRIMARY KEY,
     entity_id          VARCHAR(36)  NOT NULL,
-    account_number     VARCHAR(20)  NOT NULL,
+    account_number     VARCHAR(100) NOT NULL,
+    account_number_masked VARCHAR(20),
     program_id         INT          NOT NULL,
     available_balance  DECIMAL(15,2) NOT NULL DEFAULT 0.00,
     bank_code          VARCHAR(10)  NOT NULL,

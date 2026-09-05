@@ -33,21 +33,24 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # LLM CLIENT
 #
-# AWS Nova Micro: 1.3B parameters, AWS-native Bedrock model
-# Optimized for low-latency, cost-efficient inference on structured data tasks
+# Qwen 1.5B: Optimized for financial queries
+# Prefers HuggingFace Inference API when HUGGINGFACE_API_KEY set
+# Falls back to AWS Bedrock if needed
 # Fully compliant with Problem Statement Section 7 hard constraint (<=20B params)
 # ============================================================================
 
-DEFAULT_MODEL_ALIAS = "amazon.nova-micro"  # AWS Bedrock, 1.3B params - PS-compliant
+DEFAULT_MODEL_ALIAS = "qwen-1.5b"  # HuggingFace Qwen 1.5B - PS-compliant
 
 # Bedrock model aliases for benchmarking
 _MODEL_ALIAS_ENV_KEYS = {
+    "qwen-1.5b": "QWEN_MODEL_ID",
     "amazon.nova-micro": "NOVA_MICRO_MODEL_ID",
     "llama3-1-8b": "LLAMA_8B_MODEL_ID",
     "mistral-7b": "MISTRAL_7B_MODEL_ID",
     "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
 }
 _MODEL_ALIAS_DEFAULTS = {
+    "qwen-1.5b": "qwen-1.5b",  # Uses HuggingFace when HUGGINGFACE_API_KEY set
     "amazon.nova-micro": "amazon.nova-micro-v1:0",
     "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
     "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
@@ -165,7 +168,7 @@ class FinanceAssistantState(BaseModel):
     grounding_info: Dict[str, Any] = {}
     
     # Meta
-    model_used: str = "amazon.nova-micro"
+    model_used: str = "qwen-1.5b"
     processing_stages_completed: List[str] = []
     stage_details: Dict[str, str] = {}
     
@@ -219,8 +222,10 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         state.needs_clarification = state.confidence_score < 0.6
         
         state.processing_stages_completed.append("classification")
+        entities_str = ", ".join([f"{k}={v}" for k, v in state.entities.items()]) if state.entities else "none"
+        filters_str = ", ".join([f"{k}={v}" for k, v in state.filters.items()]) if state.filters else "none"
         state.stage_details["classification"] = (
-            f"Intent: {state.intent} · confidence {state.confidence_score:.0%}"
+            f"Intent: {state.intent} | Entities: {entities_str} | Filters: {filters_str} | Confidence: {state.confidence_score:.0%}"
         )
         logger.info(f"Classification complete: intent={state.intent}, confidence={state.confidence_score:.2f}")
         
@@ -264,13 +269,14 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
     """
     Generate SQL query using few-shot + chain-of-thought
     """
-    logger.info("Generating SQL query")
+    logger.info(f"SQL generation node called: user_query={state.user_query[:50]}")
     
     if state.needs_clarification:
         logger.info("Skipping SQL generation due to clarification needed")
         return state
     
     try:
+        logger.info("Calling LLM for chain-of-thought reasoning")
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
 
         # First, build CoT prompt
@@ -281,6 +287,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
             call_llm, cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2
         )
         logger.debug(f"Chain-of-thought: {cot_text[:200]}")
+        logger.info("CoT reasoning complete, now generating SQL with few-shot examples")
         
         # Now generate SQL with few-shot examples
         few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
@@ -297,8 +304,9 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         
         state.sql_query = sql_text
         state.processing_stages_completed.append("sql_generation")
-        first_line = sql_text.strip().splitlines()[0] if sql_text.strip() else ""
-        state.stage_details["sql_generation"] = f"{first_line[:80]}..." if len(sql_text) > 80 else first_line
+        # Show full SQL or truncate if very long
+        sql_preview = sql_text.strip()[:200] + "..." if len(sql_text.strip()) > 200 else sql_text.strip()
+        state.stage_details["sql_generation"] = f"SQL Query:\n{sql_preview}"
         logger.info(f"SQL generated: {sql_text[:100]}...")
         
     except Exception as e:
@@ -379,8 +387,10 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         if success:
             state.query_results = result if isinstance(result, list) else [result]
             state.processing_stages_completed.append("query_execution")
-            state.stage_details["query_execution"] = f"{len(state.query_results)} row(s) returned"
-            logger.info(f"Query execution successful, {len(state.query_results)} rows returned")
+            rows = len(state.query_results)
+            cols = len(state.query_results[0]) if state.query_results and len(state.query_results) > 0 else 0
+            state.stage_details["query_execution"] = f"Execution successful | {rows} row(s) × {cols} column(s)"
+            logger.info(f"Query execution successful, {rows} rows returned with {cols} columns")
         else:
             state.execution_error = str(result)
             logger.error(f"Query execution failed: {result}")
@@ -433,9 +443,12 @@ async def anomaly_detection_node(state: FinanceAssistantState) -> FinanceAssista
             logger.info(state.anomaly_summary)
         
         state.processing_stages_completed.append("anomaly_detection")
-        state.stage_details["anomaly_detection"] = (
-            state.anomaly_summary if state.anomalies else "No anomalies detected"
-        )
+        if state.anomalies:
+            state.stage_details["anomaly_detection"] = (
+                f"{state.anomaly_summary} | Used: Z-score + Isolation Forest + Business Rules"
+            )
+        else:
+            state.stage_details["anomaly_detection"] = "No anomalies detected (clean data)"
         
     except Exception as e:
         logger.error(f"Anomaly detection error: {e}")
@@ -520,7 +533,7 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
         
         state.processing_stages_completed.append("response_formatting")
         state.stage_details["response_formatting"] = (
-            f"Composite confidence {composite_confidence:.0%}"
+            f"Response formatted | Confidence: {state.confidence_score:.0%} | Results: {len(state.query_results)} row(s) | Grounding: SQL + verified data"
         )
         logger.info("Response formatted successfully")
         
@@ -567,8 +580,11 @@ async def export_node(state: FinanceAssistantState) -> FinanceAssistantState:
 
 def route_clarification(state: FinanceAssistantState) -> str:
     """Route based on clarification needs"""
+    logger.info(f"route_clarification: confidence={state.confidence_score}, needs_clarification={state.needs_clarification}")
     if state.needs_clarification:
+        logger.info("Routing to clarification node")
         return "clarification"
+    logger.info("Routing to sql_generation node")
     return "sql_generation"
 
 

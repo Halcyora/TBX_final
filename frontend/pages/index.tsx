@@ -131,7 +131,7 @@ export default function Home() {
         body: JSON.stringify({
           session_id: sessionId,
           message: userMessage,
-          model: 'amazon.nova-micro', // AWS Bedrock; can be made selectable
+          model: 'qwen-1.5b', // HuggingFace Qwen 1.5B
         }),
       });
 

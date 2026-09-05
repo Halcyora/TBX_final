@@ -54,7 +54,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: ChatMessage
-    model: str = "amazon.nova-micro"
+    model: str = "qwen-1.5b"
 
 class ChatResponse(BaseModel):
     session_id: str
@@ -611,7 +611,7 @@ def get_dataset_autocomplete_context(user_query: str) -> Dict[str, List[str]]:
 @app.post("/api/autocomplete", response_model=AutocompleteResponse)
 async def autocomplete(request: AutocompleteRequest):
     """Generate sentence autocomplete suggestions grounded in financial dataset context
-    using AWS Bedrock amazon.nova-micro-v1:0"""
+    using HuggingFace Qwen 1.5B (or AWS Bedrock fallback)"""
     query = request.query.strip()
     if not query or len(query) < 2:
         return AutocompleteResponse(suggestions=[])
@@ -662,7 +662,7 @@ Rules:
         if valid:
             return AutocompleteResponse(suggestions=valid[:4])
     except Exception as e:
-        logger.warning(f"Bedrock amazon.nova-micro-v1:0 autocomplete warning: {e}")
+        logger.warning(f"Qwen autocomplete warning: {e}")
 
     # Fallback template completion grounded in data
     fallback = []

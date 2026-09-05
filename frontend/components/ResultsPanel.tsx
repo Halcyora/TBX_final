@@ -8,9 +8,9 @@ interface ResultsPanelProps {
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
   const rows = result.query_results || [];
-  // Filter out account_number_display since we handle it via encrypted cell
+  // Filter out all account number variants - we handle them in a special column
   const allColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
-  const columns = allColumns.filter((col) => col !== 'account_number_display');
+  const columns = allColumns.filter((col) => col !== 'account_number' && col !== 'account_number_display' && col !== 'account_number_encrypted');
   const [exporting, setExporting] = useState(false);
   const [showGrounding, setShowGrounding] = useState(false);
   const [decryptionCode, setDecryptionCode] = useState('');
@@ -123,6 +123,7 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
                 {columns.map((col) => (
                   <th key={col}>{col.replace(/_/g, ' ')}</th>
                 ))}
+                {hasEncryptedAccounts && <th>account number</th>}
               </tr>
             </thead>
             <tbody>
@@ -133,31 +134,27 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
                   <tr key={idx} className={anomaly ? styles[`anomalyRow_${anomaly.severity}`] : undefined} title={anomaly?.reason}>
                     {idColumn && <td className={styles.anomalyFlag}>{anomaly ? '🚨' : ''}</td>}
                     {columns.map((col) => {
-                      // Handle account_number_encrypted specially
-                      if (col === 'account_number_encrypted') {
-                        const decrypted = decryptedValues[idx];
-                        return (
-                          <td key={col} className={styles.encryptedCell}>
-                            {decrypted ? (
-                              <span className={styles.decrypted}>{decrypted}</span>
-                            ) : (
-                              <>
-                                <span className={styles.encrypted}>{formatCellValue(row[col])}</span>
-                                <button
-                                  className={styles.decryptBtn}
-                                  onClick={() => handleDecrypt(idx, row[col])}
-                                  disabled={decryptingIndex === idx || !decryptionCode.trim()}
-                                  title="Click to decrypt with your code"
-                                >
-                                  {decryptingIndex === idx ? '🔓 ...' : '🔒 Decrypt'}
-                                </button>
-                              </>
-                            )}
-                          </td>
-                        );
-                      }
                       return <td key={col}>{formatCellValue(row[col])}</td>;
                     })}
+                    {hasEncryptedAccounts && (
+                      <td className={styles.encryptedCell}>
+                        {decryptedValues[idx] ? (
+                          <span className={styles.decrypted}>{decryptedValues[idx]}</span>
+                        ) : (
+                          <>
+                            <span className={styles.encrypted}>{row.account_number_display || 'XXXXXXXX'}</span>
+                            <button
+                              className={styles.decryptBtn}
+                              onClick={() => handleDecrypt(idx, row.account_number_encrypted)}
+                              disabled={decryptingIndex === idx || !decryptionCode.trim()}
+                              title="Click to decrypt with your code"
+                            >
+                              {decryptingIndex === idx ? '🔓 ...' : '🔒 Decrypt'}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}

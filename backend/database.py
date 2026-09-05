@@ -158,15 +158,23 @@ class FinanceDB:
     def _encrypt_account_numbers(self):
         """Encrypt account numbers in the account table"""
         try:
+            # First, ensure the account_number_masked column exists (add if missing)
+            try:
+                self.conn.execute("ALTER TABLE account ADD COLUMN account_number_masked VARCHAR(20)")
+            except:
+                pass  # Column already exists
+            
             # Get all account numbers
             rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
             
             # Encrypt each account number and update the table
             for account_id, account_number in rows:
                 encrypted = AccountEncryption.encrypt_account_number(account_number)
+                # Also create a masked display version (XXXXXXXX + last 4 digits)
+                masked_display = AccountEncryption.mask_account_number(account_number)
                 self.conn.execute(
-                    "UPDATE account SET account_number = ? WHERE account_id = ?",
-                    (encrypted, account_id)
+                    "UPDATE account SET account_number = ?, account_number_masked = ? WHERE account_id = ?",
+                    (encrypted, masked_display, account_id)
                 )
             
             logger.info(f"  ✓ Encrypted {len(rows)} account numbers in the database")
@@ -214,7 +222,7 @@ class FinanceDB:
     @staticmethod
     def mask_query_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Mask account numbers in query results for display.
-        Keeps encrypted account numbers for decryption but masks them in the display."""
+        Uses pre-stored masked display value and keeps encrypted version for decryption."""
         if not results:
             return results
         
@@ -224,12 +232,13 @@ class FinanceDB:
             
             # Check if this row has an account_number field (encrypted)
             if "account_number" in masked_row:
-                account_num = masked_row["account_number"]
-                # Mask it for display
-                masked_row["account_number_display"] = AccountEncryption.mask_account_number(account_num)
-                # Keep encrypted version for API decryption
-                masked_row["account_number_encrypted"] = account_num
-                # Remove plain field - now it's the encrypted one
+                encrypted_value = masked_row["account_number"]
+                # Use the pre-stored masked display (XXXXXXXX + last 4 digits)
+                display_value = masked_row.get("account_number_masked", "XXXXXXXX")
+                
+                # Set both fields for the response
+                masked_row["account_number_display"] = display_value
+                masked_row["account_number_encrypted"] = encrypted_value
             
             masked_results.append(masked_row)
         

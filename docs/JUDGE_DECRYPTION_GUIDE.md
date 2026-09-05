@@ -1,33 +1,41 @@
-# Judge/Evaluator Quick Reference: Account Number Decryption
+# Judge Decryption Guide
 
-**See full guide**: [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md)
+**Decryption Code**: `judge_code`
 
-## Your Decryption Code
+## Quick Flow
 
+```mermaid
+sequenceDiagram
+    Judge->>Frontend: Ask query
+    Frontend->>Backend: /chat (get results)
+    Backend-->>Frontend: Results (masked: ****3729069)
+    Frontend-->>Judge: Decryption Panel
+    Judge->>Frontend: Enter code + Decrypt
+    Frontend->>Backend: /decrypt
+    Backend-->>Frontend: account_number
+    Frontend-->>Judge: ✅ Full number revealed
 ```
-judge_code
-```
 
-(If different, it will be provided separately)
+## 3 Ways to Decrypt
 
-## Quick Start
+| Method | Command | Best For |
+|--------|---------|----------|
+| **Frontend** | Enter code → Click Decrypt | Quick verification |
+| **API (cURL)** | `curl -X POST /decrypt` | Scripts |
+| **Python** | `requests.post()` | Integration |
 
-### Option 1: Using Frontend
+## Frontend Usage
 
-1. Ask a question: "Show balance for account X"
-2. See masked result: `****3729069`
-3. Scroll down to "Decryption Panel"
-4. Enter code: `judge_code`
-5. Click "🔒 Decrypt" button
-6. Full account number revealed ✅
+1. Ask question: "Show balance for account 50200013729069"
+2. See masked: `****3729069` 
+3. Scroll to Decryption Panel
+4. Enter: `judge_code`
+5. Click: 🔒 Decrypt
+6. Result: Full number (green)
 
-### Option 2: Using API (cURL)
+## API Quick Test
 
 ```bash
-# 1. Get encrypted value from query results
-# (copy the account_number_encrypted field)
-
-# 2. Decrypt
 curl -X POST http://localhost:8000/decrypt \
   -H "Content-Type: application/json" \
   -d '{
@@ -35,98 +43,20 @@ curl -X POST http://localhost:8000/decrypt \
     "decryption_code": "judge_code"
   }'
 
-# Response:
-# {"success": true, "account_number": "50200013729069"}
-```
-
-### Option 3: Using Python
-
-```python
-import requests
-
-response = requests.post(
-    'http://localhost:8000/decrypt',
-    json={
-        'encrypted_account_number': 'gAAAAABl9sX5Rk3JqPa7...',
-        'decryption_code': 'judge_code'
-    }
-)
-print(response.json())
-# {'success': True, 'account_number': '50200013729069'}
-```
-
-## Common Queries
-
-```
-"List all accounts"
-"Show balance for account 50200013729069"
-"Which accounts have negative balances?"
-"All accounts at HDFC BANK LIMITED"
-"Transactions from Q3 2025"
-```
-
-## Sample Workflow
-
-### Scenario: Verify Account Balances
-
-```
-1. Query: "Show all accounts with balance > $10,000"
-   ↓ Results:
-   Bank: HDFC BANK LIMITED
-   Account: ****3729069  [Decrypt]
-   Balance: $50,000.00
-
-2. Click [Decrypt] → Enter "judge_code"
-   ↓ Success:
-   Account: 50200013729069  ✅
-
-3. Verify in external system → Confirmed ✅
+# Success: {"success": true, "account_number": "50200013729069"}
+# Error: {"success": false, "error": "Invalid decryption code"}
 ```
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| `"Invalid decryption code"` | Check code spelling (case-sensitive) |
-| `"Failed to decrypt"` | Try a fresh query result |
-| No decrypt button visible | Query results have no encrypted accounts |
-| Decryption panel not showing | Scroll down, panel is at bottom |
-
-## Response Formats
-
-### Decrypt Success
-```json
-{
-  "success": true,
-  "account_number": "50200013729069",
-  "error": null
-}
-```
-
-### Decrypt Failed
-```json
-{
-  "success": false,
-  "account_number": null,
-  "error": "Invalid decryption code"
-}
-```
-
-## Tips
-
-✅ Same code works for all encrypted values  
-✅ Decrypt multiple rows one at a time  
-✅ Press Enter in input field to trigger decrypt  
-✅ Copy-paste encrypted values carefully  
-✅ Results include masked AND encrypted values  
-
-## Need Help?
-
-- **Technical Details**: See [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md)
-- **API Reference**: See [README.md](README.md#security-feature-account-number-encryption)
-- **Setup Issues**: Check `.env` has `DECRYPTION_CODES=judge_code`
+| Invalid code | Case-sensitive; check `.env` |
+| Failed decrypt | Refresh query, try new encrypted value |
+| No decrypt button | Query has no encrypted accounts |
+| Panel not visible | Scroll down to bottom |
 
 ---
 
-**System Status**: ✅ Ready for Evaluation
+**Full Details**: [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md)
 

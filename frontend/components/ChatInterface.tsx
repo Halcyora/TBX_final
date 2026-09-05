@@ -51,6 +51,11 @@ export default function ChatInterface({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  // Reset to chat tab when session changes
+  useEffect(() => {
+    setActiveTab('chat');
+  }, [sessionId]);
+
   // Debounced autocomplete search against Amazon Nova Micro endpoint
   useEffect(() => {
     if (input.trim().length < 2) {
@@ -281,7 +286,7 @@ export default function ChatInterface({
             <ul className={styles.suggestionDropdown}>
               <li className={styles.suggestionHeader}>
                 <span>Suggested Questions</span>
-                <span className={styles.modelBadge}>⚡ Amazon Nova Micro</span>
+                <span className={styles.modelBadge}>⚡ Qwen 1.5B</span>
               </li>
               {suggestions.map((item, idx) => (
                 <li
