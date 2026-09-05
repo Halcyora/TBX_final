@@ -191,10 +191,10 @@ export default function ChatInterface({
               <h2>Welcome to TBX Finance Assistant</h2>
               <p>Ask questions about your financial data. Examples:</p>
               <ul>
-                <li>What's our total spend with vendor ID 123?</li>
+                <li>What's the current balance for account 1001-2345?</li>
                 <li>Show me unreconciled transactions in Q3</li>
-                <li>Which vendors have unusual payment patterns?</li>
-                <li>List top 10 vendors by amount</li>
+                <li>Which accounts have unusual transaction patterns?</li>
+                <li>List top 10 accounts by transaction volume</li>
               </ul>
             </div>
           ) : (

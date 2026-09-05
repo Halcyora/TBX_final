@@ -517,24 +517,24 @@ async def autocomplete(request: AutocompleteRequest):
         return AutocompleteResponse(suggestions=[])
 
     ctx = get_dataset_autocomplete_context(query)
-    vendor_ctx = ", ".join(ctx["vendors"]) if ctx["vendors"] else "Acme Corp, TechServices Inc"
-    account_ctx = ", ".join(ctx["accounts"]) if ctx["accounts"] else "Software Licenses, Office Supplies"
+    bank_ctx = ", ".join(ctx["banks"]) if ctx["banks"] else "First National Bank, Metro Bank"
+    account_ctx = ", ".join(ctx["accounts"]) if ctx["accounts"] else "1001-2345, 2002-6789"
 
     # Try Bedrock amazon.nova-micro-v1:0
     try:
         bedrock = get_bedrock_autocomplete_client()
         prompt = f"""You are a sentence autocomplete engine for a financial analytics dashboard.
 Database Context:
-- Vendors: {vendor_ctx}
-- Chart of accounts: {account_ctx}
-- Common finance topics: vendor spend, unreconciled transactions, payout status, high amount transactions, flagged payments.
+- Banks: {bank_ctx}
+- Accounts: {account_ctx}
+- Common finance topics: account balances, unreconciled transactions, transaction history, high amount transactions, flagged payments.
 
 User input so far: "{query}"
 
 Complete what the user is typing into 1 to 3 natural, full sentence user queries.
 Rules:
 1. Every suggestion MUST start with or complete: "{query}"
-2. Use vendor names or accounts from the database context when relevant.
+2. Use bank names or account numbers from the database context when relevant.
 3. Keep sentences short and clear (5 to 15 words).
 4. Return ONLY a valid JSON array of strings containing 1-3 completion sentences, e.g. ["{query} ..."]. Do NOT include markdown codeblocks or extra prose."""
 
@@ -563,22 +563,22 @@ Rules:
     # Fallback template completion grounded in data
     fallback = []
     q_lower = query.lower()
-    sample_vendor = ctx['vendors'][0] if ctx['vendors'] else 'Acme'
-    sample_account = ctx['accounts'][0] if ctx['accounts'] else 'Software'
+    sample_bank = ctx['banks'][0] if ctx['banks'] else 'First National Bank'
+    sample_account = ctx['accounts'][0] if ctx['accounts'] else '1001-2345'
     
     templates = [
-        f"What is our total spend with vendor {sample_vendor}?",
+        f"What is the balance for account {sample_account}?",
         f"Show unreconciled transactions in Q3",
-        f"List top 10 vendors by total payout amount",
-        f"Which vendors have unusual payment patterns?",
-        f"Show transactions for account {sample_account}",
+        f"List top 10 accounts by transaction volume",
+        f"Which accounts have unusual transaction patterns?",
+        f"Show transactions for {sample_bank}",
     ]
     for t in templates:
         if t.lower().startswith(q_lower) or q_lower in t.lower():
             fallback.append(t)
             
     if not fallback:
-        fallback.append(f"{query} with vendor {sample_vendor}")
+        fallback.append(f"{query} at {sample_bank}")
 
     return AutocompleteResponse(suggestions=fallback[:4])
 

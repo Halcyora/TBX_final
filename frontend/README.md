@@ -79,11 +79,11 @@ npm start
 ## Example Queries
 
 ```
-"What's our total spend with vendor ID 123?"
+"What's the current balance for account 1001-2345?"
 "Show me unreconciled transactions in Q3"
-"Which vendors have unusual payment patterns?"
-"List top 10 vendors by amount"
-"Compare Q2 and Q3 payouts"
+"Which accounts have unusual transaction patterns?"
+"List top 10 accounts by transaction volume"
+"Compare Q2 and Q3 transaction totals"
 ```
 
 ## API Integration
