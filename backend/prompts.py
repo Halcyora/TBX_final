@@ -20,6 +20,23 @@ bank table:
 - bank_code (VARCHAR, PRIMARY KEY): Bank identifier code (e.g., HDFC, ICIC, SBIN, UTIB)
 - bank_name (VARCHAR): Canonical bank name in all-caps (e.g., HDFC BANK LIMITED)
 
+KNOWN bank_code -> bank_name MAPPING (the ONLY banks that exist - do not invent others, and do NOT
+guess a bank_code from abbreviation; several codes do NOT match the common short name, e.g. State
+Bank of India / "SBI" is code SBIN, not "SBI"; Axis Bank is code UTIB, not "AXIS"):
+- HDFC -> HDFC BANK LIMITED
+- ICIC -> ICICI BANK LIMITED
+- SBIN -> STATE BANK OF INDIA (user may say "SBI" or "State Bank")
+- UTIB -> AXIS BANK LIMITED (user may say "Axis")
+- KKBK -> KOTAK MAHINDRA BANK LIMITED (user may say "Kotak")
+- CNRB -> CANARA BANK
+- UBIN -> UNION BANK OF INDIA
+- AUBL -> AU SMALL FINANCE BANK LIMITED
+- TMBL -> TAMILNAD MERCANTILE BANK LIMITED
+- RATN -> RBL BANK LIMITED (user may say "RBL")
+When the user names a bank, look it up in this mapping and filter using the matching bank_code
+(preferred, exact match) or `UPPER(b.bank_name) LIKE UPPER('%<key part of name>%')` if unsure.
+Never filter using a bank_code you invented that isn't in this list.
+
 account table:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
@@ -70,6 +87,18 @@ IMPORTANT RULES:
 10. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
 11. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
 12. Always think step-by-step before writing SQL.
+13. CRITICAL - NEVER copy literal values (account numbers, IDs, bank codes, dates, amounts) from the
+    examples below into your query. The examples only demonstrate SQL structure/patterns. Only use
+    filter values that literally appear in the CURRENT user's question. If the question names a bank
+    (e.g. "HDFC") but no specific account, filter on bank_code/bank_name only - do NOT add an
+    account_number filter that wasn't mentioned. If the question says "sum"/"total", the query MUST
+    use SUM(), not a bare column selection.
+14. NULL-SAFE AGGREGATES: Always wrap SUM()/AVG() in COALESCE(..., 0) - e.g. COALESCE(SUM(CAST(x AS
+    DECIMAL)), 0) - so a filter that matches zero rows returns 0 instead of NULL/blank.
+15. "SUM"/"TOTAL" ONLY APPLIES TO NUMERIC COLUMNS (available_balance, transaction_amount). If the
+    user asks for "sum of accounts", "sum of transactions", "total accounts", etc. (counting rows/
+    entities, not a money amount), this means COUNT(*), NOT SUM(). Only use SUM() on the actual
+    numeric money column being asked about.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -121,12 +150,30 @@ ORDER BY CAST(a.available_balance AS DECIMAL) ASC"""
     },
     {
         "question": "What's the available balance for account 50200013729069?",
-        "reasoning": "The value '50200013729069' is a numeric digit-string, not a UUID, so it refers to account.account_number, NOT account.account_id",
+        "reasoning": "The value '50200013729069' is a numeric digit-string, not a UUID, so it refers to account.account_number, NOT account.account_id. This literal number came from the question itself - never reuse it for a different question.",
         "sql": """SELECT 
     CAST(a.available_balance AS DECIMAL) as available_balance
 FROM account a
 WHERE a.account_number = '50200013729069'
 LIMIT 1"""
+    },
+    {
+        "question": "What is the total available balance for HDFC accounts?",
+        "reasoning": "The question names a bank (HDFC) but no specific account, so filter on bank_code only - do NOT add an account_number filter. The question says 'total', so use SUM(), not a bare column selection. Wrap in COALESCE so a zero-match filter returns 0, not NULL.",
+        "sql": """SELECT 
+    COALESCE(SUM(CAST(a.available_balance AS DECIMAL)), 0) as total_available_balance
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE b.bank_code = 'HDFC'"""
+    },
+    {
+        "question": "What is the sum of accounts for SBI?",
+        "reasoning": "'Sum of accounts' means counting how many account rows exist, not summing a money column - accounts don't have a 'sum' value. 'SBI' maps to bank_code SBIN per the known bank mapping (not 'SBI'). Use COUNT(*), not SUM().",
+        "sql": """SELECT 
+    COUNT(*) as total_accounts
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE b.bank_code = 'SBIN'"""
     },
     {
         "question": "How many credit vs debit transactions are there?",
@@ -308,11 +355,32 @@ Check:
 3. Schema: All tables/columns exist?
 4. Logic: Answers the question correctly?
 5. Performance: Reasonable query structure?
+6. Bank codes: Only these bank_code values exist: HDFC, ICIC, SBIN, UTIB, KKBK, CNRB, UBIN, AUBL,
+   TMBL, RATN. Reject/fix any other bank_code literal (e.g. 'SBI' should be 'SBIN', 'AXIS' should be
+   'UTIB').
+7. Aggregates: SUM()/AVG() should be wrapped in COALESCE(..., 0) so zero matching rows return 0, not NULL.
 
 If there are issues (especially pluralized table names), fix them and return corrected SQL.
 If query is correct, return it as-is.
 
 Return ONLY the SQL query (corrected if needed), nothing else. No markdown, no explanation."""
+
+# ============================================================================
+# REPAIR PROMPT (Fix a query that failed at execution time, using the DB error)
+# ============================================================================
+SQL_REPAIR_PROMPT = """This SQL query failed when executed against the database:
+
+{sql}
+
+Database error:
+{error}
+
+Fix the query so it executes successfully against the same schema (tables: bank, account,
+transaction - all singular) while still answering the original question. Common causes:
+non-aggregated columns missing from GROUP BY, wrong table alias for a column, or a
+plural table name.
+
+Return ONLY the corrected SQL query, nothing else. No markdown, no explanation."""
 
 # ============================================================================
 # ANOMALY EXPLANATION PROMPT

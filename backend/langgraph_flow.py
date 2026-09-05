@@ -21,7 +21,7 @@ from database import get_db
 from prompts import (
     build_few_shot_prompt, build_cot_prompt,
     build_classification_prompt, CLASSIFICATION_PROMPT, SQL_VALIDATION_PROMPT,
-    CLARIFICATION_PROMPT_TEMPLATE
+    SQL_REPAIR_PROMPT, CLARIFICATION_PROMPT_TEMPLATE
 )
 from sql_validator import SQLValidator
 from tools import QueryExecutor, AnomalyDetector, DataExporter, ContextManager
@@ -377,7 +377,39 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
     
     try:
         success, result = QueryExecutor.execute(state.sql_query)
-        
+
+        # One-shot self-repair: feed the DB error back to the LLM and retry, since
+        # execution-time errors (bad GROUP BY, wrong alias, etc.) slip past static/LLM
+        # validation which only checks the query in isolation, not against real execution.
+        if not success:
+            logger.warning(f"Query execution failed, attempting one-shot repair: {result}")
+            try:
+                repair_prompt = SQL_REPAIR_PROMPT.format(sql=state.sql_query, error=str(result))
+                repaired_sql = (await asyncio.to_thread(
+                    call_llm, repair_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.0
+                )).strip()
+                if "```sql" in repaired_sql:
+                    repaired_sql = repaired_sql.split("```sql")[1].split("```")[0].strip()
+                elif "```" in repaired_sql:
+                    repaired_sql = repaired_sql.split("```")[1].split("```")[0].strip()
+
+                is_valid, validation_msg = SQLValidator.validate_query(repaired_sql)
+                if is_valid:
+                    repaired_success, repaired_result = QueryExecutor.execute(repaired_sql)
+                    if repaired_success:
+                        logger.info("Self-repair succeeded, using repaired SQL")
+                        state.sql_query = repaired_sql
+                        state.stage_details["sql_validation"] = (
+                            state.stage_details.get("sql_validation", "") + " | Repaired after execution error"
+                        )
+                        success, result = repaired_success, repaired_result
+                    else:
+                        logger.warning(f"Self-repair query also failed to execute: {repaired_result}")
+                else:
+                    logger.warning(f"Self-repair query failed static validation: {validation_msg}")
+            except Exception as repair_exc:
+                logger.error(f"Self-repair attempt errored: {repair_exc}")
+
         if success:
             rows = result if isinstance(result, list) else [result]
             # Defense-in-depth: if an entity filter is active and the LLM's SQL still
