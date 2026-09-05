@@ -471,41 +471,41 @@ def get_bedrock_autocomplete_client():
 
 
 def get_dataset_autocomplete_context(user_query: str) -> Dict[str, List[str]]:
-    """Fetch matching entity context from DuckDB tables for autocomplete grounding."""
-    vendors = []
+    """Fetch matching entity context from DuckDB tables (TBX schema) for autocomplete grounding."""
+    banks = []
     accounts = []
     clean_q = user_query.strip().lower()
     
     try:
         db = get_db()
-        # Find matching vendor names
+        # Find matching bank names (TBX schema)
         if clean_q:
-            v_rows = db.conn.execute(
-                "SELECT DISTINCT vendor_name FROM vendor_list WHERE LOWER(vendor_name) LIKE ? LIMIT 5",
+            b_rows = db.conn.execute(
+                "SELECT DISTINCT bank_name FROM bank WHERE LOWER(bank_name) LIKE ? LIMIT 5",
                 [f"%{clean_q}%"]
             ).fetchall()
-            vendors = [r[0] for r in v_rows if r[0]]
+            banks = [r[0] for r in b_rows if r[0]]
             
-        if not vendors:
-            v_rows = db.conn.execute("SELECT DISTINCT vendor_name FROM vendor_list LIMIT 5").fetchall()
-            vendors = [r[0] for r in v_rows if r[0]]
+        if not banks:
+            b_rows = db.conn.execute("SELECT DISTINCT bank_name FROM bank LIMIT 5").fetchall()
+            banks = [r[0] for r in b_rows if r[0]]
             
-        # Find matching chart of accounts
+        # Find matching account numbers (TBX schema)
         if clean_q:
             a_rows = db.conn.execute(
-                "SELECT DISTINCT account_name FROM chart_of_accounts WHERE LOWER(account_name) LIKE ? LIMIT 5",
+                "SELECT DISTINCT account_number FROM account WHERE LOWER(account_number) LIKE ? LIMIT 5",
                 [f"%{clean_q}%"]
             ).fetchall()
             accounts = [r[0] for r in a_rows if r[0]]
             
         if not accounts:
-            a_rows = db.conn.execute("SELECT DISTINCT account_name FROM chart_of_accounts LIMIT 5").fetchall()
+            a_rows = db.conn.execute("SELECT DISTINCT account_number FROM account LIMIT 5").fetchall()
             accounts = [r[0] for r in a_rows if r[0]]
             
     except Exception as e:
         logger.warning(f"Failed to fetch DB context for autocomplete: {e}")
         
-    return {"vendors": vendors, "accounts": accounts}
+    return {"banks": banks, "accounts": accounts}
 
 
 @app.post("/api/autocomplete", response_model=AutocompleteResponse)

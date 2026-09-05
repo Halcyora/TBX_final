@@ -56,37 +56,53 @@ def is_sql_safe(sql: str) -> bool:
 
 
 def build_benchmark_db() -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with read-only views over the real dataset for execution scoring."""
+    """In-memory DuckDB with TBX schema (bank, account, transaction) for execution scoring."""
     con = duckdb.connect(database=":memory:")
-    for table in ["transactions", "vendor_payouts", "reconciliation_status", "chart_of_accounts", "vendor_list"]:
+    for table in ["bank", "account", "transaction"]:
         csv_path = DATA_DIR / f"{table}.csv"
-        con.execute(f"CREATE VIEW {table} AS SELECT * FROM read_csv_auto('{csv_path.as_posix()}')")
+        if csv_path.exists():
+            con.execute(f"CREATE VIEW {table} AS SELECT * FROM read_csv_auto('{csv_path.as_posix()}', ALL_VARCHAR=TRUE)")
+        else:
+            print(f"Warning: {csv_path} not found, skipping table {table}")
     return con
 
 # System prompt reused from backend/prompts.py so the benchmark reflects real grounding behavior
-SQL_SYSTEM_PROMPT = """You are an expert SQL developer for financial data analysis.
+SQL_SYSTEM_PROMPT = """You are an expert SQL developer for TBX financial data analysis.
 Convert natural language questions into precise DuckDB SQL queries.
 
-DATABASE SCHEMA:
-- transactions: transaction_id, vendor_id, transaction_date, transaction_type (Payment, Invoice, Expense, Refund, Credit Memo), amount, currency, account_id, account_name, status (Pending, Completed, Rejected, Hold), invoice_number, reference_number, notes
-- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status (Pending, Completed, Cancelled), reference_number
-- reconciliation_status: transaction_id, reconciliation_status (Reconciled, Partially Reconciled, Unreconciled, Pending Reconciliation), matched_payout_id, reconciliation_date, last_reviewed, notes
-- chart_of_accounts: account_id, account_name, account_type (Assets, Liabilities, Revenue, Expense), category
-- vendor_list: vendor_id, vendor_name, industry, country, status (Active, Inactive, On Hold)
+DATABASE SCHEMA (TBX Finance Assistant):
+
+bank:
+- bank_code (VARCHAR, PRIMARY KEY): Bank code (HDFC, ICIC, SBIN, UTIB, KKBK, CNRB, UBIN, AUBL, etc.)
+- bank_name (VARCHAR): Full bank name (e.g., HDFC BANK LIMITED)
+
+account:
+- account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
+- entity_id (VARCHAR): Entity/customer ID (UUID)
+- account_number (VARCHAR): Account number (SENSITIVE - mask in output)
+- program_id (VARCHAR): Program ID (0, 4, 21, 46, 99)
+- available_balance (VARCHAR): Balance (can be negative, zero, or extreme values)
+- bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
+
+transaction:
+- transaction_id (VARCHAR, PRIMARY KEY): Unique transaction ID (UUID)
+- account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
+- transaction_date (VARCHAR): Timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
+- description (VARCHAR): Transaction description
+- transaction_amount (VARCHAR): Amount (can be 0.00, extreme values, etc.)
+- transaction_reference_id (VARCHAR): Reference number (often empty, can be duplicated)
+- utr_number (VARCHAR): UTR (often empty, encrypted, or plaintext)
 
 RULES:
-1. Use date filters whenever the question mentions a time period.
-2. Join tables only when necessary.
-3. Use SUM/COUNT/AVG/STDDEV for aggregations.
-4. Assume "today" is 2025-12-01 for relative date phrases like "last month".
-5. Enum-like columns (transaction_type, status, reconciliation_status) must be filtered using
-   the exact values listed in the schema above (case-sensitive) - never invent or guess values.
-6. When the question implies "spending" or "payments" without naming a specific type, do NOT
-   add a transaction_type/status filter unless the question explicitly asks to narrow it down.
-7. Always include the relevant *_id column (e.g. vendor_id) in the SELECT list alongside any
-   human-readable name, so results can be uniquely identified.
-8. "Unreconciled"/"outstanding" means reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') -
-   not yet fully reconciled. "Reconciled" alone means status = 'Reconciled' only (excludes 'Partially Reconciled').
+1. Use date filters ONLY when the question explicitly mentions a time period.
+2. Join tables only when necessary (e.g., JOIN bank ON account.bank_code = bank.bank_code).
+3. Use SUM/COUNT/AVG/MIN/MAX for aggregations.
+4. Cast numeric columns: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL).
+5. Filter transaction_type using ONLY 'credit' or 'debit' (case-sensitive).
+6. Handle NULL/empty fields: use '' for empty strings.
+7. Assume 'today' is 2026-09-05 for relative date phrases like 'last month'.
+8. Always include ID columns (account_id, transaction_id) in SELECT for unique identification.
 
 OUTPUT FORMAT: Return ONLY the SQL query, no markdown fences, no explanation."""
 
@@ -95,177 +111,168 @@ OUTPUT FORMAT: Return ONLY the SQL query, no markdown fences, no explanation."""
 CLARIFYING_SYSTEM_PROMPT = SQL_SYSTEM_PROMPT + """
 
 CLARIFICATION RULE: If the question relies on an undefined threshold, time period, or
-metric definition that would change the SQL depending on interpretation (e.g. "high
-variance", "outstanding", "recent"), do NOT write SQL yet. Instead, ask ONE short
+metric definition that would change the SQL depending on interpretation (e.g., 'high variance',
+'large transactions', 'recent activity'), do NOT write SQL yet. Instead, ask ONE short
 clarifying question to resolve the ambiguity. If the question is already unambiguous,
 answer normally per the OUTPUT FORMAT above."""
 
 # ============================================================================
-# TEST QUESTION SETS
+# TEST QUESTION SETS (TBX Schema)
 # ============================================================================
 
 TEST_QUESTIONS = {
     "easy": [
         {
             "id": "easy_001",
-            "question": "How much did we spend on vendor V00100 in November 2025?",
-            "expected_contains": ["V00100", "November", "2025"],
-            "complexity": "easy",
-            "type": "vendor_spend",
-            "answer_type": "scalar",
-            "reference_sql": "SELECT SUM(amount) AS total FROM transactions WHERE vendor_id = 'V00100' AND transaction_date >= '2025-11-01' AND transaction_date < '2025-12-01'"
-        },
-        {
-            "id": "easy_002",
-            "question": "Which transactions are unreconciled?",
-            "expected_contains": ["unreconciled", "reconciliation_status"],
-            "complexity": "easy",
-            "type": "reconciliation_status",
-            "answer_type": "list",
-            "id_column": "transaction_id",
-            "reference_sql": "SELECT transaction_id FROM reconciliation_status WHERE reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')"
-        },
-        {
-            "id": "easy_003",
-            "question": "Show me all vendor payouts from October 2024",
-            "expected_contains": ["October", "2024", "payouts"],
-            "complexity": "easy",
-            "type": "payouts",
-            "answer_type": "list",
-            "id_column": "payout_id",
-            "reference_sql": "SELECT payout_id FROM vendor_payouts WHERE payout_date >= '2024-10-01' AND payout_date < '2024-11-01'"
-        },
-        {
-            "id": "easy_004",
-            "question": "What's the total amount spent last month?",
-            "expected_contains": ["SUM", "November", "2025"],
+            "question": "How much did we spend in June 2026?",
+            "expected_contains": ["SUM", "2026-06"],
             "complexity": "easy",
             "type": "total_spend",
             "answer_type": "scalar",
-            "reference_sql": "SELECT SUM(amount) AS total FROM transactions WHERE transaction_date >= '2025-11-01' AND transaction_date < '2025-12-01'"
+            "reference_sql": "SELECT SUM(CAST(transaction_amount AS DECIMAL)) AS total FROM transaction WHERE transaction_date >= '2026-06-01' AND transaction_date < '2026-07-01'"
+        },
+        {
+            "id": "easy_002",
+            "question": "How many credit transactions are there?",
+            "expected_contains": ["COUNT", "credit"],
+            "complexity": "easy",
+            "type": "count_by_type",
+            "answer_type": "scalar",
+            "reference_sql": "SELECT COUNT(*) AS cnt FROM transaction WHERE transaction_type = 'credit'"
+        },
+        {
+            "id": "easy_003",
+            "question": "Show me accounts with negative balances",
+            "expected_contains": ["available_balance", "<", "0"],
+            "complexity": "easy",
+            "type": "negative_balance_accounts",
+            "answer_type": "list",
+            "id_column": "account_id",
+            "reference_sql": "SELECT account_id, available_balance FROM account WHERE CAST(available_balance AS DECIMAL) < 0"
+        },
+        {
+            "id": "easy_004",
+            "question": "Which banks are in the database?",
+            "expected_contains": ["bank_name", "bank_code"],
+            "complexity": "easy",
+            "type": "bank_list",
+            "answer_type": "list",
+            "id_column": "bank_code",
+            "reference_sql": "SELECT bank_code, bank_name FROM bank"
         },
         {
             "id": "easy_005",
             "question": "How many transactions do we have?",
-            "expected_contains": ["COUNT", "transactions"],
+            "expected_contains": ["COUNT", "transaction"],
             "complexity": "easy",
-            "type": "count",
+            "type": "count_all",
             "answer_type": "scalar",
-            "reference_sql": "SELECT COUNT(*) AS cnt FROM transactions"
+            "reference_sql": "SELECT COUNT(*) AS cnt FROM transaction"
         }
     ],
     
     "moderate": [
         {
             "id": "mod_001",
-            "question": "Show spending by vendor for Q3 2024 with totals",
-            "expected_contains": ["GROUP BY", "vendor", "2024-07", "2024-10"],
+            "question": "Show total spending by bank",
+            "expected_contains": ["GROUP BY", "bank", "SUM"],
             "complexity": "moderate",
-            "type": "vendor_breakdown",
+            "type": "bank_breakdown",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "reference_sql": "SELECT vendor_id, SUM(amount) AS total FROM transactions WHERE transaction_date >= '2024-07-01' AND transaction_date < '2024-10-01' GROUP BY vendor_id"
+            "id_column": "bank_code",
+            "reference_sql": "SELECT b.bank_code, b.bank_name, SUM(CAST(t.transaction_amount AS DECIMAL)) AS total FROM account a JOIN bank b ON a.bank_code = b.bank_code JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
         },
         {
             "id": "mod_002",
-            "question": "Which vendors had more than $50,000 in payments last year?",
-            "expected_contains": ["vendor", "payout", "2024", "50000"],
+            "question": "Show average transaction amount by transaction type",
+            "expected_contains": ["GROUP BY", "transaction_type", "AVG"],
             "complexity": "moderate",
-            "type": "vendor_threshold",
+            "type": "avg_by_type",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "reference_sql": "SELECT vendor_id, SUM(amount) AS total FROM vendor_payouts WHERE payout_date >= '2024-01-01' AND payout_date < '2025-01-01' GROUP BY vendor_id HAVING SUM(amount) > 50000"
+            "id_column": "transaction_type",
+            "reference_sql": "SELECT transaction_type, AVG(CAST(transaction_amount AS DECIMAL)) AS avg_amount, COUNT(*) as count FROM transaction GROUP BY transaction_type"
         },
         {
             "id": "mod_003",
-            "question": "How much is still outstanding from unreconciled transactions?",
-            "expected_contains": ["unreconciled", "SUM", "amount"],
-            "complexity": "moderate",
-            "type": "outstanding",
-            "answer_type": "scalar",
-            "reference_sql": "SELECT SUM(t.amount) AS total FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')"
-        },
-        {
-            "id": "mod_004",
-            "question": "Show the top 10 largest transactions across all vendors",
-            "expected_contains": ["ORDER BY", "amount", "DESC", "LIMIT 10"],
+            "question": "What is the top 5 largest transactions?",
+            "expected_contains": ["ORDER BY", "DESC", "LIMIT 5"],
             "complexity": "moderate",
             "type": "top_transactions",
             "answer_type": "list",
             "id_column": "transaction_id",
-            "reference_sql": "SELECT transaction_id, amount FROM transactions ORDER BY amount DESC LIMIT 10"
+            "reference_sql": "SELECT transaction_id, transaction_amount, transaction_date FROM transaction ORDER BY CAST(transaction_amount AS DECIMAL) DESC LIMIT 5"
+        },
+        {
+            "id": "mod_004",
+            "question": "Show accounts by program ID with balance totals",
+            "expected_contains": ["GROUP BY", "program_id"],
+            "complexity": "moderate",
+            "type": "program_breakdown",
+            "answer_type": "list",
+            "id_column": "program_id",
+            "reference_sql": "SELECT program_id, COUNT(*) AS account_count, SUM(CAST(available_balance AS DECIMAL)) AS total_balance FROM account GROUP BY program_id"
         },
         {
             "id": "mod_005",
-            "question": "Compare spending between Q3 and Q4 2024",
-            "expected_contains": ["2024-07", "2024-10", "2024-10", "2025-01"],
+            "question": "How many transactions have missing UTR?",
+            "expected_contains": ["COUNT", "utr_number", "=", "''"],
             "complexity": "moderate",
-            "type": "period_comparison",
-            "answer_type": "keyed_rows",
-            "reference_sql": "SELECT 'Q3' AS quarter, SUM(amount) AS total FROM transactions WHERE transaction_date >= '2024-07-01' AND transaction_date < '2024-10-01' UNION ALL SELECT 'Q4' AS quarter, SUM(amount) AS total FROM transactions WHERE transaction_date >= '2024-10-01' AND transaction_date < '2025-01-01'"
+            "type": "missing_fields",
+            "answer_type": "scalar",
+            "reference_sql": "SELECT COUNT(*) AS missing_utr_count FROM transaction WHERE utr_number = ''"
         }
     ],
     
     "complex": [
         {
             "id": "complex_001",
-            "question": "For each vendor with high variance in transaction amounts (indicating possible billing errors), show their average amount and count of transactions",
-            "expected_contains": ["GROUP BY", "vendor", "STDDEV", "AVG", "COUNT"],
+            "question": "For each bank, show average account balance and transaction count",
+            "expected_contains": ["GROUP BY", "bank", "AVG", "COUNT"],
             "complexity": "complex",
-            "type": "statistical_analysis",
+            "type": "bank_analysis",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "multiturn": True,
-            "clarifying_reply": "Use a standard deviation greater than 500 as the threshold for 'high variance'.",
-            "reference_sql": "SELECT vendor_id, AVG(amount) AS avg_amount, COUNT(*) AS txn_count FROM transactions GROUP BY vendor_id HAVING STDDEV(amount) > 500"
+            "id_column": "bank_code",
+            "reference_sql": "SELECT b.bank_code, b.bank_name, COUNT(DISTINCT a.account_id) AS account_count, AVG(CAST(a.available_balance AS DECIMAL)) AS avg_balance, SUM(CAST(t.transaction_amount AS DECIMAL)) AS total_transactions FROM account a JOIN bank b ON a.bank_code = b.bank_code LEFT JOIN transaction t ON a.account_id = t.account_id GROUP BY b.bank_code, b.bank_name"
         },
         {
             "id": "complex_002",
-            "question": "Which vendors have unreconciled transactions that don't have matching payouts, and what's the total outstanding amount?",
-            "expected_contains": ["LEFT JOIN", "unreconciled", "matched_payout_id", "NULL"],
+            "question": "Show accounts with extreme balances (over 100M or under -100M) and their transaction activity",
+            "expected_contains": ["ABS", "available_balance", ">", "100000000"],
             "complexity": "complex",
-            "type": "reconciliation_gap_analysis",
+            "type": "extreme_balances",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "multiturn": True,
-            "clarifying_reply": "Include all transaction types and all dates, no additional filtering.",
-            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') AND r.matched_payout_id IS NULL GROUP BY t.vendor_id"
+            "id_column": "account_id",
+            "reference_sql": "SELECT a.account_id, CAST(a.available_balance AS DECIMAL) AS balance, COUNT(t.transaction_id) AS txn_count FROM account a LEFT JOIN transaction t ON a.account_id = t.account_id WHERE ABS(CAST(a.available_balance AS DECIMAL)) > 100000000 GROUP BY a.account_id, a.available_balance"
         },
         {
             "id": "complex_003",
-            "question": "Identify vendors whose last transaction was more than 6 months ago and list their outstanding unreconciled amounts",
-            "expected_contains": ["DATE", "MAX", "unreconciled", "2025-03"],
+            "question": "Find transactions with zero or micro amounts and show their distribution",
+            "expected_contains": ["amount", "0.00", "0.01"],
             "complexity": "complex",
-            "type": "dormant_vendors",
+            "type": "micro_transactions",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "multiturn": True,
-            "clarifying_reply": "Assume today is 2025-12-01 and use exactly 6 calendar months, so 'dormant' means their last transaction was before 2025-06-01.",
-            "reference_sql": "SELECT t.vendor_id, SUM(t.amount) AS outstanding FROM transactions t JOIN reconciliation_status r ON t.transaction_id = r.transaction_id WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') AND t.vendor_id IN (SELECT vendor_id FROM transactions GROUP BY vendor_id HAVING MAX(transaction_date) < '2025-06-01') GROUP BY t.vendor_id"
+            "id_column": "transaction_type",
+            "reference_sql": "SELECT transaction_type, CAST(transaction_amount AS DECIMAL) as amount, COUNT(*) as count FROM transaction WHERE CAST(transaction_amount AS DECIMAL) <= 0.01 GROUP BY transaction_type, CAST(transaction_amount AS DECIMAL)"
         },
         {
             "id": "complex_004",
-            "question": "Show a breakdown of reconciliation status by month for 2024, including counts and percentages",
-            "expected_contains": ["DATE_TRUNC", "reconciliation_status", "COUNT", "CASE"],
+            "question": "Show the longest gaps between transactions for each account",
+            "expected_contains": ["MAX", "transaction_date", "account_id"],
             "complexity": "complex",
-            "type": "reconciliation_trend",
+            "type": "transaction_gaps",
             "answer_type": "list",
-            "id_column": "reconciliation_status",
-            "multiturn": True,
-            "clarifying_reply": "Just show the breakdown for March 2024, not all 12 months.",
-            "reference_sql": "SELECT reconciliation_status, COUNT(*) AS cnt FROM reconciliation_status WHERE reconciliation_date >= '2024-03-01' AND reconciliation_date < '2024-04-01' GROUP BY reconciliation_status"
+            "id_column": "account_id",
+            "reference_sql": "SELECT account_id, MAX(transaction_date) AS last_transaction, MIN(transaction_date) AS first_transaction FROM transaction GROUP BY account_id"
         },
         {
             "id": "complex_005",
-            "question": "For vendors in the Technology industry, show their average payout amount, transaction count, and reconciliation completion rate",
-            "expected_contains": ["vendor_list", "industry", "AVG", "COUNT", "reconciliation"],
+            "question": "Find duplicate reference IDs or UTRs that appear in multiple accounts",
+            "expected_contains": ["COUNT", "HAVING", "transaction_reference_id"],
             "complexity": "complex",
-            "type": "industry_analysis",
+            "type": "duplicate_references",
             "answer_type": "list",
-            "id_column": "vendor_id",
-            "multiturn": True,
-            "clarifying_reply": "Use vendor_payouts for the average payout amount and count; you can skip the reconciliation completion rate for this pass.",
-            "reference_sql": "SELECT vp.vendor_id, AVG(vp.amount) AS avg_payout, COUNT(vp.payout_id) AS payout_count FROM vendor_payouts vp JOIN vendor_list vl ON vp.vendor_id = vl.vendor_id WHERE vl.industry = 'Technology' GROUP BY vp.vendor_id"
+            "id_column": "reference_id",
+            "reference_sql": "SELECT transaction_reference_id, COUNT(DISTINCT account_id) AS account_count, COUNT(*) AS total_count FROM transaction WHERE transaction_reference_id != '' GROUP BY transaction_reference_id HAVING COUNT(DISTINCT account_id) > 1"
         }
     ]
 }
@@ -304,10 +311,10 @@ class BenchmarkRunner:
         # Execution-based scoring: run generated SQL against the real dataset and
         # compare against a precomputed reference result (ground truth).
         self.db = build_benchmark_db()
-        # Lets list comparisons accept a vendor_name column in place of vendor_id
-        self.vendor_name_to_id = {
-            str(name).strip().lower(): vid
-            for vid, name in self.db.execute("SELECT vendor_id, vendor_name FROM vendor_list").fetchall()
+        # Build bank_code to bank_name mapping for TBX schema
+        self.bank_code_to_name = {
+            code: name
+            for code, name in self.db.execute("SELECT bank_code, bank_name FROM bank").fetchall()
         }
         self.reference_cache: Dict[str, List[Tuple]] = {}
         for complexity in ["easy", "moderate", "complex"]:
