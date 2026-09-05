@@ -1,19 +1,18 @@
 import React, { useState } from 'react';
 import { FinanceAnswer } from '../lib/types';
-import StepsList from './StepsList';
 import styles from '../styles/ResultsPanel.module.css';
 
 interface ResultsPanelProps {
   result: FinanceAnswer;
 }
 
-type TabId = 'steps' | 'grounding';
+type TabId = 'grounding';
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
   const rows = result.query_results || [];
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   const [exporting, setExporting] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('steps');
+  const [activeTab, setActiveTab] = useState<TabId>('grounding');
 
   const anomaliesById = new Map(
     (result.anomalies_detected || []).map((a) => [String(a.transaction_id), a])
@@ -102,22 +101,13 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
         <div className={styles.section}>
           <div className={styles.tabBar}>
             <button
-              className={`${styles.tabButton} ${activeTab === 'steps' ? styles.tabActive : ''}`}
-              onClick={() => setActiveTab('steps')}
-            >
-              🔄 Steps
-            </button>
-            <button
               className={`${styles.tabButton} ${activeTab === 'grounding' ? styles.tabActive : ''}`}
               onClick={() => setActiveTab('grounding')}
+              title="SQL query and data grounding information"
             >
               📊 Grounding Info
             </button>
           </div>
-
-          {activeTab === 'steps' && (
-            <StepsList stages={result.processing_stages || []} details={result.stage_details} />
-          )}
 
           {activeTab === 'grounding' && (
             <>

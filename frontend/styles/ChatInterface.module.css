@@ -5,6 +5,122 @@
   background: #ffffff;
 }
 
+/* Tab Bar */
+.tabBar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e5e5e5;
+  background: #f7f7f8;
+  padding: 0 1rem;
+}
+
+.tabButton {
+  padding: 0.75rem 1.5rem;
+  background: none;
+  border: none;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  white-space: nowrap;
+}
+
+.tabButton:hover {
+  color: #202123;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.tabButton.tabActive {
+  color: #202123;
+  border-bottom-color: #202123;
+  font-weight: 600;
+}
+
+.tabContent {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.emptyState {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 0.95rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.resultsList {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.resultItem {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 1rem;
+  background: #fafafa;
+}
+
+.resultItem h3 {
+  margin: 0 0 1rem 0;
+  color: #202123;
+  font-size: 0.95rem;
+}
+
+.stepsList {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stepItemContainer {
+  padding: 0.75rem;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border-left: 3px solid #10a37f;
+}
+
+.stepMsgIndex {
+  font-size: 0.8rem;
+  color: #999;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.stepDetail {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  color: #444;
+}
+
+.stepCheck {
+  color: #10a37f;
+  font-weight: bold;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+}
+
+.stepDescription {
+  color: #999;
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+  display: block;
+  margin-top: 0.25rem;
+}
+
 .messagesContainer {
   flex: 1;
   overflow-y: auto;
