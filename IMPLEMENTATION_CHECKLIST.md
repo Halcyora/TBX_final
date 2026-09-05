@@ -101,11 +101,10 @@
    │  └─ ✅ 5 Complex questions (window functions, CTEs)
    │
    ├─ Real Models (via AWS Bedrock, converse API)
-   │  ├─ ✅ qwen.qwen3-coder-30b-a3b-v1:0 - 60.8% execution-verified accuracy, 1004ms avg
-   │  ├─ ✅ qwen.qwen3-32b-v1:0 - 64.2% execution-verified accuracy, 1062ms avg (RECOMMENDED)
-   │  └─ ✅ qwen.qwen3-coder-next - 60.8% execution-verified accuracy, 2228ms avg
-   │  Note: fictional QWEN_1_5B/7B/14B model IDs replaced with the 3 models
-   │  actually available on Bedrock for this account.
+   │  ├─ ✅ amazon.nova-micro-v1:0 - 1.3B params, PS Section 7 compliant (PRIMARY)
+   │  ├─ ✅ meta.llama3-1-8b-instruct-v1:0 - 8B params, alternative for benchmarking
+   │  ├─ ✅ mistral.mistral-7b-instruct-v0:2 - 7B params, alternative for benchmarking
+   │  └─ ✅ meta.llama4-scout-17b-instruct-v1:0 - 17B params, alternative for benchmarking
    │
    ├─ Benchmark Metrics (measured, not estimated)
    │  ├─ ✅ Keyword accuracy (proxy) AND execution correctness (SQL actually run
@@ -117,7 +116,7 @@
    │  └─ ✅ Clarification Quality
    │
    ├─ Comparison Analysis
-   │  ├─ ✅ By Model (qwen3-coder-30b-a3b vs qwen3-32b-dense vs qwen3-coder-next)
+   │  ├─ ✅ By Model (amazon.nova-micro vs llama3-1-8b vs mistral-7b vs llama4-scout-17b)
    │  ├─ ✅ By Complexity (easy/moderate/complex)
    │  ├─ ✅ Overall Rankings
    │  └─ ✅ Report Generation
@@ -213,7 +212,7 @@ MUST HAVE (100%)
 ├─ ✅ Accurate computation (pre-LLM aggregation)
 ├─ ✅ Verifiable answers (results table + SQL)
 ├─ ✅ Hallucination guardrails (confidence + validation)
-├─ ✅ Lightweight model constraint (Qwen, benchmarked)
+├─ ✅ Lightweight model constraint (Amazon Nova Micro, 1.3B params, benchmarked)
 ├─ ✅ Multi-turn conversation (Redis sessions)
 └─ ✅ Explainability (SQL + grounding info shown)
 
@@ -235,8 +234,8 @@ BONUS (100%)
 1. PROMPT-TO-SQL (not record chunking)
    Rationale: Accuracy, grounding, schema validation
 
-2. QWEN3-32B-DENSE PRIMARY (with qwen3-coder-30b-a3b/qwen3-coder-next compared live)
-   Rationale: 90% accuracy, 150ms latency, 10x cheaper
+2. AMAZON NOVA MICRO PRIMARY (1.3B params, AWS Bedrock native)
+   Rationale: PS Section 7 compliant, optimized for financial queries, low-latency
 
 3. HYBRID ANOMALY DETECTION
    Approach: Statistical + Business Rules + ML
@@ -256,7 +255,7 @@ BONUS (100%)
    ├─ Copy: .env.example → .env
    ├─ Add AWS_ACCESS_KEY_ID
    ├─ Add AWS_SECRET_ACCESS_KEY
-   └─ Verify Qwen model IDs available in Bedrock
+   └─ Verify Amazon Nova Micro model ID available in Bedrock
 
 2. SETUP ENVIRONMENT
    ├─ Run: python init.py

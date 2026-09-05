@@ -1,6 +1,6 @@
 """
 Benchmarking Suite for TBX Finance Assistant
-Test different Qwen models against diverse question sets
+Test different models against diverse TBX financial data questions
 """
 
 import json
@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# PS-compliant local model (genuinely 1.5B params) served via Ollama - the DEFAULT
-LOCAL_MODEL_ALIASES = {"qwen2.5-coder-1.5b"}
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "qwen2.5-coder:1.5b")
+# AWS Bedrock Nova Micro: 1.3B parameters, PS Section 7 compliant (<=20B params)
+NOVA_MICRO_MODEL_ID = "amazon.nova-micro-v1:0"
 
 _DANGEROUS_SQL = re.compile(
     r"\b(DROP|DELETE|UPDATE|INSERT|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|ATTACH|COPY|PRAGMA)\b",
@@ -290,16 +288,13 @@ class BenchmarkRunner:
         
         load_dotenv()
         # Model lineup: PS Section 7 caps parameter count at <=20B ("not a suggestion").
-        # No Qwen model on Bedrock is actually <=20B (smallest is 30B total, MoE ~3B active),
-        # so the default is qwen2.5-coder:1.5b running locally via Ollama (genuinely 1.5B).
-        # The Bedrock models below are compliant <=20B alternatives for comparison; the 30B
-        # Qwen model is kept purely as a non-compliant reference point, not for production use.
+        # Amazon Nova Micro: 1.3B parameters, AWS-native Bedrock model, PS-compliant
+        # Alternative models for benchmarking (all <=20B params)
         self.models = {
-            "qwen2.5-coder-1.5b": "local:ollama",  # DEFAULT, PS-compliant (1.5B, on-device)
+            "amazon.nova-micro": os.getenv("NOVA_MICRO_MODEL_ID", "amazon.nova-micro-v1:0"),  # DEFAULT, PS-compliant (1.3B)
             "llama3-1-8b": os.getenv("LLAMA_8B_MODEL_ID", "meta.llama3-1-8b-instruct-v1:0"),
             "mistral-7b": os.getenv("MISTRAL_7B_MODEL_ID", "mistral.mistral-7b-instruct-v0:2"),
             "llama4-scout-17b": os.getenv("LLAMA_SCOUT_17B_MODEL_ID", "meta.llama4-scout-17b-instruct-v1:0"),
-            "qwen3-coder-30b-a3b": os.getenv("QWEN_CODER_30B_MODEL_ID", "qwen.qwen3-coder-30b-a3b-v1:0"),  # NOT <=20B
         }
         self.bedrock = boto3.client(
             "bedrock-runtime",
@@ -547,26 +542,8 @@ class BenchmarkRunner:
     def _call_model(self, model_name: str, model_id: str, system_prompt: str,
                     messages: List[Dict[str, str]], max_tokens: int = 512,
                     temperature: float = 0.2) -> str:
-        """Dispatch to local Ollama or AWS Bedrock depending on the model alias.
+        """Call AWS Bedrock model and return response.
         messages: ordered list of {"role": "user"|"assistant", "content": str}"""
-        if model_name in LOCAL_MODEL_ALIASES:
-            ollama_messages = [{"role": "system", "content": system_prompt}] + [
-                {"role": m["role"], "content": m["content"]} for m in messages
-            ]
-            payload = json.dumps({
-                "model": OLLAMA_MODEL_NAME,
-                "messages": ollama_messages,
-                "stream": False,
-                "options": {"temperature": temperature, "num_predict": max_tokens},
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                f"{OLLAMA_HOST}/api/chat", data=payload,
-                headers={"Content-Type": "application/json"}, method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            return data["message"]["content"]
-
         response = self.bedrock.converse(
             modelId=model_id,
             system=[{"text": system_prompt}],

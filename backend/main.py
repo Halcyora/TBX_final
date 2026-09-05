@@ -53,7 +53,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: ChatMessage
-    model: str = "qwen2.5-coder-1.5b"
+    model: str = "amazon.nova-micro"
 
 class ChatResponse(BaseModel):
     session_id: str

@@ -107,7 +107,7 @@ export default function Home() {
         body: JSON.stringify({
           session_id: sessionId,
           message: userMessage,
-          model: 'qwen2.5-coder-1.5b', // local via Ollama; can be made selectable
+          model: 'amazon.nova-micro', // AWS Bedrock; can be made selectable
         }),
       });
 

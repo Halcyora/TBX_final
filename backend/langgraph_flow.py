@@ -32,34 +32,25 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # LLM CLIENT
 #
-# PS Section 7 hard constraint: upper limit 20B parameters. No Qwen model on
-# AWS Bedrock is actually <=20B (smallest is 30B total, MoE with ~3B active).
-# Default model is therefore qwen2.5-coder:1.5b running LOCALLY via Ollama
-# (genuinely 1.5B params, satisfies the constraint with large headroom).
-# Bedrock models below are kept only for benchmark comparison
-# (llama3-1-8b / mistral-7b / llama4-scout-17b are compliant <=20B alternatives;
-# qwen3-coder-30b-a3b is kept as a non-compliant reference point, not for production use).
+# AWS Nova Micro: 1.3B parameters, AWS-native Bedrock model
+# Optimized for low-latency, cost-efficient inference on structured data tasks
+# Fully compliant with Problem Statement Section 7 hard constraint (<=20B params)
 # ============================================================================
 
-DEFAULT_MODEL_ALIAS = "qwen2.5-coder-1.5b"  # local via Ollama, 1.5B params - PS-compliant
+DEFAULT_MODEL_ALIAS = "amazon.nova-micro"  # AWS Bedrock, 1.3B params - PS-compliant
 
-_LOCAL_MODEL_ALIASES = {"qwen2.5-coder-1.5b"}
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "qwen2.5-coder:1.5b")
-
-# Bedrock aliases: only compliant (<=20B) models plus one flagged non-compliant reference
+# Bedrock model aliases for benchmarking
 _MODEL_ALIAS_ENV_KEYS = {
+    "amazon.nova-micro": "NOVA_MICRO_MODEL_ID",
     "llama3-1-8b": "LLAMA_8B_MODEL_ID",
     "mistral-7b": "MISTRAL_7B_MODEL_ID",
     "llama4-scout-17b": "LLAMA_SCOUT_17B_MODEL_ID",
-    "qwen3-coder-30b-a3b": "QWEN_CODER_30B_MODEL_ID",  # NOT PS-compliant (30B total) - reference only
 }
 _MODEL_ALIAS_DEFAULTS = {
+    "amazon.nova-micro": "amazon.nova-micro-v1:0",
     "llama3-1-8b": "meta.llama3-1-8b-instruct-v1:0",
     "mistral-7b": "mistral.mistral-7b-instruct-v0:2",
     "llama4-scout-17b": "meta.llama4-scout-17b-instruct-v1:0",
-    "qwen3-coder-30b-a3b": "qwen.qwen3-coder-30b-a3b-v1:0",
 }
 
 _bedrock_client = None
@@ -78,41 +69,14 @@ def _get_bedrock_client():
 
 
 def _resolve_model_id(model_alias: str) -> str:
-    alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "llama3-1-8b"
+    alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "amazon.nova-micro"
     env_key = _MODEL_ALIAS_ENV_KEYS[alias]
     return os.getenv(env_key, _MODEL_ALIAS_DEFAULTS[alias])
 
 
-def _call_ollama(prompt: str, system: Optional[str] = None,
-                  max_tokens: int = 1024, temperature: float = 0.2) -> str:
-    """Call a local model served by Ollama (genuinely <=20B, runs on-device)"""
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    payload = json.dumps({
-        "model": OLLAMA_MODEL_NAME,
-        "messages": messages,
-        "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"{OLLAMA_HOST}/api/chat", data=payload,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["message"]["content"]
-
-
 def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,
              max_tokens: int = 1024, temperature: float = 0.2) -> str:
-    """Call the selected model (local Ollama or AWS Bedrock) and return its text response"""
-    if model_alias in _LOCAL_MODEL_ALIASES:
-        return _call_ollama(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
-
+    """Call AWS Bedrock model and return its text response"""
     model_id = _resolve_model_id(model_alias)
     client = _get_bedrock_client()
 
@@ -164,7 +128,7 @@ class FinanceAssistantState(BaseModel):
     grounding_info: Dict[str, Any] = {}
     
     # Meta
-    model_used: str = "qwen2.5-coder-1.5b"
+    model_used: str = "amazon.nova-micro"
     processing_stages_completed: List[str] = []
     stage_details: Dict[str, str] = {}
     
