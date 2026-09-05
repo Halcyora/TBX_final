@@ -13,6 +13,7 @@ import pandas as pd
 
 from database import get_db, FinanceDB
 from sql_validator import SQLValidator, QueryResultValidator
+from encryption import AccountEncryption
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,43 @@ class QueryExecutor:
     """Executes validated SQL queries"""
     
     @staticmethod
+    def _decrypt_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Decrypt sensitive columns (account_number, utr_number) in query results.
+        Happens after SQL execution for efficiency - fetch first, decrypt only what's needed.
+        """
+        if not results:
+            return results
+        
+        decrypted_results = []
+        for row in results:
+            decrypted_row = row.copy()
+            
+            # Decrypt account_number if present
+            if "account_number" in decrypted_row and decrypted_row["account_number"]:
+                try:
+                    decrypted_account = AccountEncryption.decrypt_account_number(decrypted_row["account_number"])
+                    decrypted_row["account_number"] = decrypted_account
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt account_number: {e}, keeping encrypted value")
+            
+            # Decrypt utr_number if present
+            if "utr_number" in decrypted_row and decrypted_row["utr_number"]:
+                try:
+                    decrypted_utr = AccountEncryption.decrypt_account_number(decrypted_row["utr_number"])
+                    decrypted_row["utr_number"] = decrypted_utr
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt utr_number: {e}, keeping encrypted value")
+            
+            decrypted_results.append(decrypted_row)
+        
+        return decrypted_results
+    
+    @staticmethod
     def execute(sql: str) -> Tuple[bool, Any]:
         """
-        Execute SQL query with validation and error handling
+        Execute SQL query with validation and error handling.
+        Decrypts sensitive fields at runtime for display.
         Returns: (success, result or error_message)
         """
         # Validate query first
@@ -34,8 +69,8 @@ class QueryExecutor:
         try:
             db = get_db()
             results = db.execute_query(sql)
-            # Mask account numbers for security (keep encrypted values for decryption API)
-            results = FinanceDB.mask_query_results(results)
+            # Decrypt sensitive fields at runtime (efficient - decrypt only if present)
+            results = QueryExecutor._decrypt_results(results)
             logger.info(f"Query executed successfully, returned {len(results)} rows")
             return True, results
         

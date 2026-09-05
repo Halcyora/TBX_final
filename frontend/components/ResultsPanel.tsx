@@ -101,8 +101,8 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <div className={`${styles.confidence} ${styles[result.confidence_band]}`}>
-          {result.confidence_band.toUpperCase()} CONFIDENCE
+        <div className={`${styles.confidence} ${result.confidence_band ? styles[result.confidence_band] : ''}`}>
+          {(result.confidence_band || 'MEDIUM').toUpperCase()} CONFIDENCE
           <span className={styles.score}>
             {(result.confidence_score * 100).toFixed(0)}%
           </span>

@@ -23,7 +23,7 @@ bank table:
 account table:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
-- account_number (VARCHAR): Account number (SENSITIVE - encrypted in database, masked in display)
+- account_number (VARCHAR): Account number (SENSITIVE - encrypted in database, automatically decrypted at runtime for display)
 - program_id (VARCHAR): Program/product ID (0, 4, 21, 46, 99)
 - available_balance (VARCHAR): Account balance (can be negative, zero, or extreme values)
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
@@ -37,8 +37,8 @@ transaction table (SINGULAR - NOT "transactions"):
 - transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
 - description (VARCHAR): Transaction description (can contain special chars, quotes, slashes)
 - transaction_amount (VARCHAR): Amount (can be 0.00, micro amounts, or extreme values)
-- transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
-- utr_number (VARCHAR): Unique Transaction Reference (often empty, encrypted, or plaintext)
+- transaction_reference_id (VARCHAR): Reference/receipt number (plaintext, directly searchable)
+- utr_number (VARCHAR): UTR (SENSITIVE - encrypted in database, automatically decrypted at runtime for display)
 
 CRITICAL TABLE NAME RULES:
 1. The correct table name is "transaction" (SINGULAR). NEVER use "transactions" (plural).
@@ -53,18 +53,23 @@ IMPORTANT RULES:
    When users ask about "transaction date" or "dates" without mentioning time, extract DATE ONLY using CAST(transaction_date AS DATE).
    Example: "What is the most common transaction date?" → GROUP BY CAST(transaction_date AS DATE), NOT the full timestamp.
    This ensures grouping by calendar date, not by each unique datetime combination.
-3. JOIN tables only when necessary:
+3. SENSITIVE COLUMN HANDLING - account_number and utr_number are encrypted in the database but WILL BE DECRYPTED AT RUNTIME:
+   - You can query them directly: SELECT account_number FROM account WHERE ...
+   - You can JOIN on account_number: JOIN account ON transaction.account_id = account.account_id
+   - They will be decrypted automatically before being shown to the user
+   - No special handling needed in SQL - just query normally
+4. JOIN tables only when necessary:
    - To get bank names: JOIN bank ON account.bank_code = bank.bank_code
    - To get account details: JOIN account ON transaction.account_id = account.account_id
    - Never JOIN unnecessarily - keep queries simple.
-4. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
-5. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
-6. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
-7. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
-8. Return meaningful column names using AS aliases
-9. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
-10. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
-11. Always think step-by-step before writing SQL.
+5. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
+6. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
+7. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
+8. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
+9. Return meaningful column names using AS aliases
+10. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
+11. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
+12. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
