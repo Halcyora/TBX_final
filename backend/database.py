@@ -8,8 +8,11 @@ import os
 import duckdb
 import threading
 from pathlib import Path
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import logging
+
+from crypto_utils import encrypt_value, decrypt_value
+from query_cache import flush_all
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +30,125 @@ class FinanceDB:
         Initialize database connection
         Args:
             db_path: Path to DuckDB database file
-            dataset: 'small' (10 records) or 'large' (500k+ records)
+            dataset: 'small' (10 records) or 'large' (500k+ records), ignored if MySQL is configured
         """
         self.db_path = db_path
         self.dataset = dataset
         self.conn = None
         self.query_timeout_seconds = float(os.getenv("QUERY_TIMEOUT_SECONDS", "15"))
+        self.mysql_config = self._read_mysql_config()
         self.initialize()
-    
+
+    @staticmethod
+    def _read_mysql_config() -> Optional[Dict[str, str]]:
+        """Read MySQL connection settings from env vars, if a host+user+database are provided.
+        For final verification against a judge-provided database with the same bank/account/
+        transaction schema, instead of the bundled CSV datasets."""
+        host = os.getenv("MYSQL_HOST")
+        user = os.getenv("MYSQL_USER")
+        database = os.getenv("MYSQL_DATABASE")
+        if not (host and user and database):
+            return None
+        return {
+            "host": host,
+            "port": os.getenv("MYSQL_PORT", "3306"),
+            "user": user,
+            "password": os.getenv("MYSQL_PASSWORD", ""),
+            "database": database,
+        }
+
     def initialize(self):
-        """Initialize DuckDB connection and load data"""
+        """Initialize DuckDB connection and load data (from MySQL if configured, else CSV)"""
         try:
             self.conn = duckdb.connect(self.db_path, read_only=False)
             logger.info(f"Connected to DuckDB: {self.db_path}")
-            self._load_data_from_csv()
+            if self.mysql_config:
+                self._load_data_from_mysql()
+            else:
+                self._load_data_from_csv()
+            # A verified-query cache entry from a previous run/dataset isn't safe to replay
+            # against whatever just got loaded - see switch_dataset()'s flush for the same reason.
+            flush_all()
             logger.info("Data loaded successfully")
         except Exception as e:
             logger.error(f"Failed to initialize DuckDB: {e}")
             raise
+
+    def _load_data_from_mysql(self):
+        """Attach a live MySQL database via DuckDB's mysql extension and copy its
+        bank/account/transaction tables into local DuckDB tables of the same name, for final
+        verification against a real judge-provided database instead of the bundled CSV
+        datasets. Materializes a snapshot (same pattern as CSV loading) rather than exposing
+        live views, since aggregate queries against live mysql-scanner views hit a known DuckDB
+        internal error (count_star() binding failure) with this extension.
+
+        All three tables are loaded FIRST, then encrypted in one separate pass at the end -
+        deliberately not interleaved (encrypting account right after it loads, mid-loop, before
+        `transaction` exists) the way an earlier version of this did, which queried the
+        transaction table before it had been created."""
+        cfg = self.mysql_config
+        logger.info(f"Connecting to MySQL at {cfg['host']}:{cfg['port']}/{cfg['database']} for final verification")
+
+        try:
+            self.conn.execute("INSTALL mysql")
+            self.conn.execute("LOAD mysql")
+
+            conn_parts = [f"host={cfg['host']}", f"port={cfg['port']}", f"user={cfg['user']}", f"db={cfg['database']}"]
+            if cfg["password"]:
+                conn_parts.insert(3, f"passwd={cfg['password']}")
+            conn_string = " ".join(conn_parts)
+            self.conn.execute(f"ATTACH '{conn_string}' AS mysqldb (TYPE mysql)")
+
+            for table_name in ("bank", "account", "transaction"):
+                for drop_stmt in (f'DROP VIEW IF EXISTS "{table_name}"', f'DROP TABLE IF EXISTS "{table_name}"'):
+                    try:
+                        self.conn.execute(drop_stmt)
+                    except Exception:
+                        pass  # object doesn't exist or is the other kind - safe to ignore
+                self.conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM mysqldb."{table_name}"')
+                row_count = self.conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+                logger.info(f"  ✓ Loaded {table_name} from MySQL: {row_count:,} rows")
+
+            self.conn.execute("DETACH mysqldb")
+            self._encrypt_sensitive_columns()
+            self._create_indexes()
+
+        except Exception as e:
+            logger.error(f"Failed to attach MySQL database: {e}")
+            raise
+
+    def _encrypt_sensitive_columns(self):
+        """Encrypt account.account_number and transaction.utr_number (AES-256-GCM, see
+        crypto_utils.py) for any freshly-ingested plaintext values - the judge-provided MySQL
+        data arrives plaintext. Skips values that are already ciphertext (idempotent, safe to
+        call again e.g. after a restart)."""
+        account_rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
+        encrypted_count = 0
+        for account_id, account_number in account_rows:
+            # decrypt_value() is a no-op passthrough for anything that isn't valid ciphertext
+            # for our key - if it comes back unchanged, this is plaintext that needs encrypting.
+            if not account_number or decrypt_value(account_number) != account_number:
+                continue
+            self.conn.execute(
+                "UPDATE account SET account_number = ? WHERE account_id = ?",
+                (encrypt_value(account_number), account_id),
+            )
+            encrypted_count += 1
+        logger.info(f"  ✓ Encrypted {encrypted_count} account number(s)")
+
+        utr_rows = self.conn.execute(
+            'SELECT transaction_id, utr_number FROM "transaction" WHERE utr_number IS NOT NULL'
+        ).fetchall()
+        encrypted_utr_count = 0
+        for transaction_id, utr_number in utr_rows:
+            if not utr_number or decrypt_value(utr_number) != utr_number:
+                continue
+            self.conn.execute(
+                'UPDATE "transaction" SET utr_number = ? WHERE transaction_id = ?',
+                (encrypt_value(utr_number), transaction_id),
+            )
+            encrypted_utr_count += 1
+        logger.info(f"  ✓ Encrypted {encrypted_utr_count} UTR number(s)")
     
     def _load_data_from_csv(self):
         """Load CSV files into DuckDB tables from selected dataset"""
@@ -200,9 +304,12 @@ class FinanceDB:
         """Switch between small and large dataset"""
         if dataset not in ["small", "large"]:
             raise ValueError("Dataset must be 'small' or 'large'")
-        
+
         self.dataset = dataset
         self._load_data_from_csv()
+        # A cached SQL query verified against the old dataset isn't safe to replay against the
+        # new one - different data, even though the SQL itself would still be schema-valid.
+        flush_all()
         logger.info(f"Switched to {dataset} dataset")
     
     def close(self):

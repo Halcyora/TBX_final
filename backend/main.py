@@ -84,6 +84,9 @@ class AutocompleteRequest(BaseModel):
 class AutocompleteResponse(BaseModel):
     suggestions: List[str]
 
+class DatasetSwitchRequest(BaseModel):
+    dataset: str  # 'small' or 'large'
+
 # ============================================================================
 # IN-MEMORY SESSION MANAGER (Redis removed for local/dev use; see PRODUCTION.md)
 # ============================================================================
@@ -271,11 +274,19 @@ except Exception as e:
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    try:
+        db = get_db()
+        data_source = "mysql" if db.mysql_config else f"csv ({db.dataset})"
+        db_ok = True
+    except Exception:
+        data_source = "unavailable"
+        db_ok = False
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "session_backend": "in-memory",
-        "database_initialized": True
+        "database_initialized": db_ok,
+        "data_source": data_source
     }
 
 @app.post("/sessions/create", response_model=Dict[str, str])
@@ -646,6 +657,39 @@ Rules:
         fallback.append(f"{query} at {sample_bank}")
 
     return AutocompleteResponse(suggestions=fallback[:4])
+
+@app.get("/dataset")
+async def get_dataset():
+    """Get the currently active dataset/data source and row counts"""
+    try:
+        db = get_db()
+        stats = db.get_dataset_stats()
+        return {
+            "data_source": "mysql" if db.mysql_config else f"csv ({db.dataset})",
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Dataset endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dataset/switch")
+async def switch_dataset(request: DatasetSwitchRequest):
+    """Switch between the small and large CSV datasets (same request/response format
+    as the rest of the API). Not applicable when connected to a live MySQL database."""
+    try:
+        db = get_db()
+        db.switch_dataset(request.dataset)
+        stats = db.get_dataset_stats()
+        return {
+            "message": f"Switched to '{request.dataset}' dataset",
+            "data_source": f"csv ({db.dataset})",
+            **stats
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Dataset switch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/schema")
 async def get_schema():

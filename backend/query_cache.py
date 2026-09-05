@@ -73,3 +73,18 @@ def store_verified_sql(question: str, sql: str) -> None:
         client.set(f"verified_sql:{normalize_question(question)}", sql)
     except Exception as e:
         logger.warning(f"Verified-query cache write failed: {e}")
+
+
+def flush_all() -> None:
+    """Drop every cached entry. Call this whenever the underlying dataset changes (CSV
+    small/large switch, or CSV <-> MySQL at startup) - a query verified against one dataset
+    is not safe to replay against another with different data, even though the SQL itself
+    would still be schema-valid. The cache key has no dataset discriminator, so a full flush
+    is the simplest correct fix (this cache is best-effort to begin with)."""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.flushdb()
+    except Exception as e:
+        logger.warning(f"Verified-query cache flush failed: {e}")
