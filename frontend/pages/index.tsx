@@ -98,29 +98,18 @@ export default function Home() {
 
     // Reuse a still-valid session from a previous page load instead of always creating a new one
     const restoreOrCreateSession = async () => {
-      const storedSessionId = localStorage.getItem('tbx_session_id');
-
-      if (storedSessionId) {
-        try {
-          const existing = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/sessions/${storedSessionId}`);
-          if (existing.ok) {
-            await switchToSession(storedSessionId);
-            refreshSessions();
-            return;
-          }
-        } catch (error) {
-          console.error('Failed to validate existing session:', error);
-        }
-      }
-
-      // Stored session is gone (e.g. backend restarted) - fall back to the most recently
-      // active existing session instead of silently spawning a new empty one. Only create
-      // a brand new session if none exist at all; explicit new chats go through onNewChat.
       try {
+        // First, list all existing sessions to pick the most recent one
         const listResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/sessions`);
         const existingSessions: SessionInfo[] = listResponse.ok ? await listResponse.json() : [];
+        
         if (existingSessions.length > 0) {
-          await switchToSession(existingSessions[0].session_id);
+          // Prefer the stored session if it's still valid
+          const storedSessionId = localStorage.getItem('tbx_session_id');
+          const validStoredSession = storedSessionId && existingSessions.some(s => s.session_id === storedSessionId);
+          
+          const targetSessionId = validStoredSession ? storedSessionId : existingSessions[0].session_id;
+          await switchToSession(targetSessionId);
           setSessions(existingSessions);
           return;
         }
@@ -128,10 +117,11 @@ export default function Home() {
         console.error('Failed to list existing sessions:', error);
       }
 
+      // Only create a brand new session if truly none exist
       await createNewSession();
     };
     restoreOrCreateSession();
-  }, []);
+  }, [refreshSessions, switchToSession, createNewSession]);
 
   const handleSendMessage = async (message: string) => {
     if (!sessionId || !message.trim()) return;
