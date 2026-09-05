@@ -26,48 +26,57 @@ BANK_CODE_MAP = {
 # ============================================================================
 SQL_GENERATION_SYSTEM_PROMPT = """Convert natural language questions into SQL queries for TBX financial data.
 
-SCHEMA (all singular table names):
+DATABASE SCHEMA:
 - bank: bank_code, bank_name
-- account: account_id, account_number, available_balance, bank_code
-- transaction: transaction_id, account_id, transaction_date, transaction_type ('credit'/'debit'), transaction_amount, description, transaction_reference_id, utr_number
+- account: account_id, account_number, available_balance, bank_code, entity_id
+- transaction (SINGULAR - NOT plural): transaction_id, account_id, transaction_date, transaction_type, transaction_amount
 
-KEY RULES:
-1. Table names are SINGULAR: transaction (NOT transactions), account (NOT accounts), bank (NOT banks)
-2. available_balance and transaction_amount are VARCHAR - always CAST to DECIMAL before math operations
-3. Use SUM() only for "total"/"sum" of money amounts - use COUNT(*) for "sum of accounts/transactions"
-4. account_number is a digit string (e.g., '50200013729069'); account_id is a UUID
-5. Bank mapping: HDFC→HDFC, ICIC→ICICI, SBIN→SBI, UTIB→Axis, KKBK→Kotak, CNRB→Canara, UBIN→Union, AUBL→AU, TMBL→Tamilnad, RATN→RBL
-6. Only filter by date if user explicitly mentions a time period
-7. For grouping by date: use CAST(transaction_date AS DATE)
-8. Wrap aggregates in COALESCE: COALESCE(SUM(CAST(x AS DECIMAL)), 0)
-9. Never copy example values into your query - use only values from the user's question
+CRITICAL RULES:
+1. Table names are ALWAYS SINGULAR: FROM transaction (NOT transactions), FROM account (NOT accounts)
+2. available_balance and transaction_amount are VARCHAR - CAST to DECIMAL before any math
+3. Use SUM() for money totals, COUNT(*) for counting rows/entities
+4. account_number is the numeric value users mention; account_id is the UUID
+5. transaction_type is ONLY 'credit' or 'debit'
+6. Date filtering: only add WHERE clause if user mentions a specific time period
+7. For date grouping: use CAST(transaction_date AS DATE)
+8. Wrap aggregates: COALESCE(SUM(CAST(x AS DECIMAL)), 0) to return 0 instead of NULL
+9. Only return SQL - no explanations, no markdown, no wrapping
 
-RETURN ONLY THE SQL QUERY - no explanation."""
+IMPORTANT - Table Name Examples:
+- CORRECT: SELECT COUNT(*) FROM account
+- CORRECT: SELECT * FROM transaction WHERE transaction_type = 'credit'
+- WRONG: SELECT COUNT(*) FROM accounts (plural)
+- WRONG: SELECT * FROM transactions (plural)
+
+Return ONLY the SQL query - nothing else."""
 
 # ============================================================================
 # FEW-SHOT EXAMPLES FOR SQL GENERATION (TBX Schema)
 # ============================================================================
 SQL_EXAMPLES = [
     {
-        "question": "How many accounts are there?",
-        "sql": "SELECT COUNT(*) as total_accounts FROM account"
+        "question": "How many accounts do we have?",
+        "sql": "SELECT COUNT(*) as account_count FROM account"
     },
     {
-        "question": "What's the total available balance?",
+        "question": "What is the total balance of all accounts?",
         "sql": "SELECT COALESCE(SUM(CAST(available_balance AS DECIMAL)), 0) as total_balance FROM account"
     },
     {
-        "question": "Show all transactions from HDFC",
-        "sql": """SELECT t.*, b.bank_name
+        "question": "Show transactions from HDFC bank",
+        "sql": """SELECT t.transaction_id, t.transaction_date, t.transaction_type, CAST(t.transaction_amount AS DECIMAL) as amount
 FROM transaction t
 JOIN account a ON t.account_id = a.account_id
-JOIN bank b ON a.bank_code = b.bank_code
-WHERE b.bank_code = 'HDFC'
-LIMIT 100"""
+WHERE a.bank_code = 'HDFC'
+LIMIT 50"""
     },
     {
-        "question": "What's the balance for account 50200013729069?",
-        "sql": "SELECT account_number, CAST(available_balance AS DECIMAL) as balance FROM account WHERE account_number = '50200013729069'"
+        "question": "What is the available balance for account 50200013729069?",
+        "sql": "SELECT CAST(available_balance AS DECIMAL) as balance FROM account WHERE account_number = '50200013729069'"
+    },
+    {
+        "question": "How many credit vs debit transactions are there?",
+        "sql": "SELECT transaction_type, COUNT(*) as count, COALESCE(SUM(CAST(transaction_amount AS DECIMAL)), 0) as total_amount FROM transaction GROUP BY transaction_type"
     }
 ]
 
