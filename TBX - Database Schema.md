@@ -1,13 +1,14 @@
 ---
-tags: [tiby, database, schema, er-diagram]
+tags: [tbx, database, schema, er-diagram]
 type: technical-documentation
-project: Tiby
+project: TBX Finance Assistant
 created: 2026-09-03
-updated: 2026-09-03
-source: "transbnk-account-transaction-bot repo — core/database.py, config/constants.py"
+updated: 2026-09-05
 ---
 
 # Finance Assistant — Database Schema
+
+> 📚 **Full Docs**: See [DOCS.md](DOCS.md) for complete guide index
 
 The tables a hackathon team actually needs to build and test a finance assistant against: **3 tables, one database.** No app-internal logging/feedback tables included — those aren't part of what you build or test.
 

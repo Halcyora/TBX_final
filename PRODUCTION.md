@@ -1,5 +1,7 @@
 # TBX Finance Assistant — MVP & Production Deployment
 
+> 📚 **Full Docs**: See [DOCS.md](DOCS.md) for all guides and references
+
 ## MVP Phase (Current)
 
 ### Architecture

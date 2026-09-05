@@ -1,5 +1,7 @@
 # TBX Finance Assistant - Architecture
 
+> 📚 **Full Docs**: See [../DOCS.md](../DOCS.md) for complete guide index
+
 ## System Stack
 
 ```mermaid

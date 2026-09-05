@@ -1,5 +1,8 @@
 # Account Number Encryption
 
+> 📚 **Full Docs**: See [../DOCS.md](../DOCS.md) for complete guide index  
+> **Quick Judge Guide**: See [JUDGE_DECRYPTION_GUIDE.md](JUDGE_DECRYPTION_GUIDE.md)
+
 ## Encryption Flow
 
 ```mermaid

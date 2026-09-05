@@ -1,5 +1,8 @@
 # TBX Finance Assistant - React Frontend
 
+> 📚 **Full Docs**: See [../DOCS.md](../DOCS.md) for complete guide index  
+> **Main README**: See [../README.md](../README.md) for backend & architecture
+
 A modern React/Next.js frontend for the TBX Finance Assistant with real-time chat, session management, and results visualization.
 
 ## Features

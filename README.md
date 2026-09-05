@@ -2,7 +2,7 @@
 
 **Conversational AI Assistant for Financial Data Queries**
 
-> 📚 **Full Documentation Index**: See [DOCS.md](DOCS.md) for all documentation files and quick reference guides
+> 📚 **Full Documentation**: See [DOCS.md](DOCS.md) for complete index, quick start, and all guides
 
 ## Overview
 
@@ -186,25 +186,66 @@ curl -X POST http://localhost:8000/decrypt \
 **📖 See [JUDGE_DECRYPTION_GUIDE.md](JUDGE_DECRYPTION_GUIDE.md) for quick reference**  
 **📚 See [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md) for technical details**
 
-## Usage
+## API Endpoints
 
-### Chat API
+### Core Chat API
+**Base URL**: `http://localhost:8000`
 
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/chat` | Send message to assistant, get grounded response |
+| `POST` | `/sessions/create` | Create new session |
+| `GET` | `/sessions` | List all sessions |
+| `GET` | `/sessions/{session_id}` | Get session info & metadata |
+| `GET` | `/sessions/{session_id}/messages` | Get all messages in session |
+| `DELETE` | `/sessions/{session_id}` | Delete session |
+
+### Export & Security
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/export` | Export query results as CSV |
+| `POST` | `/decrypt` | Decrypt masked account numbers (judge access) |
+
+### Utility Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Server status check |
+| `GET` | `/schema` | Get database schema (for UI autocomplete) |
+| `GET` | `/dataset` | Get current active dataset (small/large) |
+| `POST` | `/dataset/switch` | Switch between small/large dataset |
+| `GET` | `/entities` | List all entities (customers) |
+| `POST` | `/api/autocomplete` | Autocomplete entity/account names |
+
+### Swagger Documentation
+- **Interactive API Docs**: `http://localhost:8000/docs`
+- **ReDoc Docs**: `http://localhost:8000/redoc`
+
+### Example: Send Chat Message
 ```bash
-# Create session
-curl -X POST http://localhost:8000/sessions/create
-
-# Send query
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "session_id": "session-uuid",
-    "message": {"content": "What is the total spending across all accounts?"},
-    "model": "amazon.nova-micro"
+    "session_id": "cc2fb6c0-7bfc-48f2-899e-ddc6520621b1",
+    "message": {
+      "role": "user",
+      "content": "What is the total balance of HDFC accounts?"
+    },
+    "model": "qwen-1.5b",
+    "entity_id": null
   }'
 ```
 
-### Example Queries
+### Example: Decrypt Account Number
+```bash
+curl -X POST http://localhost:8000/decrypt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "encrypted_account_number": "gAAAAABl9sX5Rk3JqPa7...",
+    "decryption_code": "judge_code"
+  }'
+```
+
+## Usage
 
 ```
 Easy:
@@ -425,10 +466,22 @@ Framework: LangGraph (LangChain)
 
 ## Support
 
-For issues or questions:
-1. Check `.env.example` for missing config
-2. Review logs in `./logs/`
-3. Run benchmark to validate setup
+**Documentation Quick Links:**
+- 📚 [DOCS.md](DOCS.md) — **Start here** for complete index
+- 🏗️ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System design
+- 🔐 [docs/ACCOUNT_ENCRYPTION.md](docs/ACCOUNT_ENCRYPTION.md) — Encryption setup
+- 🔓 [docs/JUDGE_DECRYPTION_GUIDE.md](docs/JUDGE_DECRYPTION_GUIDE.md) — Decryption guide
+- 📊 [TBX - Database Schema.md](TBX%20-%20Database%20Schema.md) — Database reference
+- 🚀 [PRODUCTION.md](PRODUCTION.md) — Deployment guide
+- 💬 [SAMPLE_QUESTIONS.md](SAMPLE_QUESTIONS.md) — Example queries
+- ⚛️ [frontend/README.md](frontend/README.md) — Frontend guide
+
+**For issues or questions:**
+1. Check [DOCS.md](DOCS.md) for task-based navigation
+2. Review relevant technical doc above
+3. Check `.env.example` for missing config
+4. Review logs in `./logs/`
+5. Run benchmark to validate setup
 
 ---
 

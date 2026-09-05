@@ -1,5 +1,7 @@
 # Sample Questions — TBX Finance Assistant
 
+> 📚 **Full Docs**: See [DOCS.md](DOCS.md) for complete guide index
+
 Grounded in the actual `bank` / `account` / `transaction` dataset (`data/small/*.csv`). Use these to test the assistant or as UI example prompts.
 
 ## Account balance & lookup

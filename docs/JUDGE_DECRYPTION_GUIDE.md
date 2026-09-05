@@ -2,6 +2,9 @@
 
 **Decryption Code**: `judge_code`
 
+> 📚 **Full Docs**: See [../DOCS.md](../DOCS.md) for complete guide index  
+> **Technical Details**: See [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md)
+
 ## Quick Flow
 
 ```mermaid
