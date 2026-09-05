@@ -4,6 +4,23 @@ Includes few-shot examples, system prompts, and response formatting
 TBX Schema: bank, account, transaction
 """
 
+# Mirrors the "KNOWN bank_code -> bank_name MAPPING" documented in
+# SQL_GENERATION_SYSTEM_PROMPT below - used in code (not just prompt text) to detect
+# when a user names exactly one bank, so a generated query that lumps in every known
+# bank_code can be corrected post-hoc (see langgraph_flow.py _restrict_to_named_bank).
+BANK_CODE_MAP = {
+    "HDFC": ["hdfc"],
+    "ICIC": ["icici"],
+    "SBIN": ["sbin", "sbi", "state bank"],
+    "UTIB": ["utib", "axis"],
+    "KKBK": ["kkbk", "kotak"],
+    "CNRB": ["cnrb", "canara"],
+    "UBIN": ["ubin", "union bank"],
+    "AUBL": ["aubl", "au small finance", "au bank"],
+    "TMBL": ["tmbl", "tamilnad"],
+    "RATN": ["ratn", "rbl"],
+}
+
 # ============================================================================
 # SYSTEM PROMPT FOR SQL GENERATION
 # ============================================================================

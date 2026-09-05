@@ -21,13 +21,102 @@ from database import get_db
 from prompts import (
     build_few_shot_prompt, build_cot_prompt,
     build_classification_prompt, CLASSIFICATION_PROMPT, SQL_VALIDATION_PROMPT,
-    SQL_REPAIR_PROMPT, CLARIFICATION_PROMPT_TEMPLATE
+    SQL_REPAIR_PROMPT, CLARIFICATION_PROMPT_TEMPLATE, BANK_CODE_MAP
 )
 from sql_validator import SQLValidator
 from tools import QueryExecutor, AnomalyDetector, DataExporter, ContextManager
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+import re
+
+
+def _detect_named_banks(user_query: str) -> List[str]:
+    """Return the bank_code(s) the user's question names, based on BANK_CODE_MAP aliases."""
+    query_lower = user_query.lower()
+    matched = []
+    for code, aliases in BANK_CODE_MAP.items():
+        if any(re.search(rf"\b{re.escape(alias)}\b", query_lower) for alias in aliases):
+            matched.append(code)
+    return matched
+
+
+def _restrict_to_named_bank(sql: str, user_query: str) -> str:
+    """
+    If the question names exactly one bank but the generated SQL filters with a
+    `bank_code IN (...)` list spanning multiple codes (observed: the LLM sometimes pastes
+    the entire known bank_code mapping instead of a single '=' filter), narrow it down to
+    that one bank so results aren't grouped/summed across unrelated banks.
+    """
+    matched_codes = _detect_named_banks(user_query)
+    if len(matched_codes) != 1:
+        return sql
+    target_code = matched_codes[0]
+
+    pattern = re.compile(r"(\b[\w]+\.)?bank_code\s+IN\s*\(([^)]+)\)", re.IGNORECASE)
+
+    def _replace(match: "re.Match") -> str:
+        prefix = match.group(1) or ""
+        codes_in_list = re.findall(r"'([A-Za-z]+)'", match.group(2))
+        if target_code not in [c.upper() for c in codes_in_list] or len(codes_in_list) <= 1:
+            return match.group(0)
+        return f"{prefix}bank_code = '{target_code}'"
+
+    return pattern.sub(_replace, sql)
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _enforce_entity_scope(sql: str, entity_id: str) -> str:
+    """
+    Defense-in-depth for entity isolation: force every query touching account/transaction
+    to be restricted to the locked entity_id, regardless of whether the LLM's own SQL
+    included that filter. Relying on the LLM to always add `entity_id = ...` is not
+    sufficient - a query that never selects entity_id (e.g. "utr number?") can otherwise
+    leak rows belonging to other entities past the post-execution row filter, since that
+    filter only fires when an `entity_id` column happens to be present in the results.
+
+    Both `account` and `transaction` carry (or FK to, via account_id) entity_id, so this
+    works regardless of which columns the query actually selects.
+    """
+    if not entity_id or not _UUID_RE.match(entity_id):
+        # Fail closed: an entity filter is expected but the value isn't a well-formed
+        # UUID - refuse to interpolate it into SQL rather than risk injection.
+        raise ValueError(f"Invalid entity_id for scoping: {entity_id!r}")
+
+    scoped_aliases = []
+    for match in re.finditer(
+        r"\b(?:FROM|JOIN)\s+(account|transaction)\b(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?",
+        sql, re.IGNORECASE,
+    ):
+        table = match.group(1).lower()
+        alias = match.group(2) or table
+        if alias.upper() in ("WHERE", "GROUP", "ORDER", "LIMIT", "JOIN", "ON",
+                              "INNER", "LEFT", "RIGHT", "FULL", "AS"):
+            alias = table
+        scoped_aliases.append((table, alias))
+
+    if not scoped_aliases:
+        return sql  # query doesn't touch account/transaction - nothing to scope
+
+    conditions = " AND ".join(
+        f"{alias}.account_id IN (SELECT account_id FROM account WHERE entity_id = '{entity_id}')"
+        for _, alias in scoped_aliases
+    )
+
+    tail_match = re.search(r"\b(GROUP BY|ORDER BY|LIMIT)\b", sql, re.IGNORECASE)
+    insertion_point = tail_match.start() if tail_match else len(sql)
+    head, tail = sql[:insertion_point], sql[insertion_point:]
+    head = head.rstrip().rstrip(";")
+
+    if re.search(r"\bWHERE\b", head, re.IGNORECASE):
+        head += f" AND ({conditions}) "
+    else:
+        head += f" WHERE ({conditions}) "
+
+    return head + tail
 
 # ============================================================================
 # LLM CLIENT
@@ -293,7 +382,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         # Prompt is already large (system prompt + all few-shot examples) relative to the model's
         # 4096-token context window, so keep max_tokens modest - SQL queries rarely need more.
         sql_text = (await asyncio.to_thread(
-            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.1
+            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=350, temperature=0.1
         )).strip()
         
         # Clean up SQL (remove markdown formatting if present)
@@ -338,7 +427,7 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
             # re-checked with the same static safety net before being trusted for execution
             corrected_sql = (await asyncio.to_thread(
                 call_llm, SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
-                model_alias=state.model_used, max_tokens=512, temperature=0.0
+                model_alias=state.model_used, max_tokens=350, temperature=0.0
             )).strip()
             
             if "```sql" in corrected_sql:
@@ -382,7 +471,11 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
     logger.info("Executing query")
     
     try:
-        success, result = QueryExecutor.execute(state.sql_query)
+        exec_sql = state.sql_query
+        if state.entity_id:
+            exec_sql = _enforce_entity_scope(exec_sql, state.entity_id)
+
+        success, result = QueryExecutor.execute(exec_sql)
 
         # One-shot self-repair: feed the DB error back to the LLM and retry, since
         # execution-time errors (bad GROUP BY, wrong alias, etc.) slip past static/LLM
@@ -392,7 +485,7 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
             try:
                 repair_prompt = SQL_REPAIR_PROMPT.format(sql=state.sql_query, error=str(result))
                 repaired_sql = (await asyncio.to_thread(
-                    call_llm, repair_prompt, model_alias=state.model_used, max_tokens=512, temperature=0.0
+                    call_llm, repair_prompt, model_alias=state.model_used, max_tokens=350, temperature=0.0
                 )).strip()
                 if "```sql" in repaired_sql:
                     repaired_sql = repaired_sql.split("```sql")[1].split("```")[0].strip()
@@ -401,7 +494,10 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
 
                 is_valid, validation_msg = SQLValidator.validate_query(repaired_sql)
                 if is_valid:
-                    repaired_success, repaired_result = QueryExecutor.execute(repaired_sql)
+                    repaired_exec_sql = repaired_sql
+                    if state.entity_id:
+                        repaired_exec_sql = _enforce_entity_scope(repaired_exec_sql, state.entity_id)
+                    repaired_success, repaired_result = QueryExecutor.execute(repaired_exec_sql)
                     if repaired_success:
                         logger.info("Self-repair succeeded, using repaired SQL")
                         state.sql_query = repaired_sql
