@@ -325,6 +325,61 @@ what it needs on the day:
   - it fails safe, not silently wrong. Decryption cost is not a scaling concern at this row count
   either way (§4.5: ~0.3ms even at the 100K-row execution cap that bounds any single result set).
 
+## 6.5 Round 4: merging with a teammate's parallel branch
+
+While this session was doing rounds 1-3 on `accuracy-improvements`, a teammate independently
+pushed 8 commits directly to `origin/main` addressing overlapping ground: the same model
+(Qwen2.5-Coder-1.5B via the same shared vLLM endpoint - independently, not coordinated), an
+account/UTR encryption layer, and - a real capability this branch didn't have - MySQL ingestion.
+Both branches were tested individually, live, before merging anything (not just read from source).
+
+**What `origin/main` actually does better, verified:** real DuckDB-`ATTACH`-based MySQL ingestion
+code exists (`_load_data_from_mysql`), and a session-delete endpoint + full-payload turn
+persistence (a real fix this branch was missing - see below).
+
+**What was tested and found NOT to hold up, against a live local MySQL 8.0 container and the
+real deployed model (not inferred from reading source):**
+- The exact pathological query from §3.5 (`OR`-joined self-join) was sent to `origin/main`'s live
+  server on the 500K-transaction dataset. It has no equivalent of this branch's
+  `_check_join_cost`/`_execute_with_timeout` guards. Result: the entire server became
+  unresponsive to *all* requests (even `/health`), ballooned to ~5.75GB RSS, and had to be
+  force-killed - a strictly worse failure mode than this branch's graceful 15s cancel-and-continue,
+  since one bad question takes down the whole app for every user, not just that one request.
+- MySQL ingestion (`_load_data_from_mysql`) was tested against a real local MySQL 8.0 container
+  (Docker), schema loaded from `mysql_schema.sql`, data from `data/small/*.csv`. `bank` and
+  `account` load and encrypt correctly, but ingesting `transaction` **hangs indefinitely** -
+  reproduced twice cleanly from a fresh DB file with no other process holding a lock. An isolated
+  script running the identical `ATTACH`/`CREATE TABLE transaction AS SELECT * FROM
+  mysqldb.transaction` calls outside the app completed in under a second, so the bug is specific
+  to running inside the actual FastAPI app, not the DuckDB mysql extension itself or a
+  reserved-keyword parsing issue (that specific hypothesis was tested and ruled out). Root cause
+  not fully isolated (likely connection/cursor state left over from the `account`-table encryption
+  step) - the honest conclusion is that this capability, while a genuinely valuable idea, was never
+  actually verified end-to-end on `origin/main` and is not usable as shipped.
+- The "masked account number, reveal with a `judge_code`" flow (`docs/JUDGE_DECRYPTION_GUIDE.md`)
+  provides no real protection even on its own terms: the `/chat` response already contains the
+  fully-decrypted `account_number` in `query_results` regardless of the code - masking is a
+  frontend display choice on top of an already-unmasked API response, not an access control. This
+  independently confirms the user's decision to skip masking entirely wasn't a security tradeoff.
+- Its encryption (Fernet for `account_number`, hand-rolled unauthenticated AES-256-CBC for
+  `utr_number`) has a real bug: if `ENCRYPTION_KEY` is unset, a Fernet key is generated
+  in-process and only logged - a server restart silently strands all previously-encrypted data.
+
+**A real gap in *this* branch, found while checking the above (not a merge casualty - fix
+regardless):** `SessionManager.add_turn` here only persists question/answer/stage text per turn;
+`origin/main`'s persists the *full* response (confidence, grounding, anomalies, query_results) so
+a page reload restores the whole results panel. Also found: `frontend/lib/types.ts` (imported by
+four components) has never existed in git on *either* branch - `.gitignore`'s Python-venv
+`lib/`/`lib64/` patterns unintentionally also matched `frontend/lib/`, so the frontend has never
+been buildable from a fresh clone. Both fixed in the merge below, independent of anything else.
+
+**Decision:** merge into a new branch off `accuracy-improvements` (the more mature, tested base),
+porting only: the MySQL ingestion *concept*, fixed and re-verified against the same local MySQL
+container until it actually completes; session delete + full-payload persistence; the
+`.gitignore`/`types.ts` fix; a couple of cosmetic `StepsList.tsx` improvements. Explicitly not
+ported: `origin/main`'s weaker crypto, its masking/judge-code UI, its blind LLM-self-review SQL
+step (this branch already replaced that anti-pattern in round 1), and its unguarded `SQLValidator`.
+
 ## 7. Progress tracker
 
 Supersedes `IMPLEMENTATION_CHECKLIST.md`'s earlier claims, which described a different, partly
