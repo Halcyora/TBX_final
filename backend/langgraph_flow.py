@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 import boto3
+from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
@@ -54,6 +55,11 @@ _MODEL_ALIAS_DEFAULTS = {
 }
 
 _bedrock_client = None
+_hf_client = None
+
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
+# This model is only served by the featherless-ai partner provider on HF's router
+HF_PROVIDER = os.getenv("HF_PROVIDER", "featherless-ai")
 
 
 def _get_bedrock_client():
@@ -68,6 +74,27 @@ def _get_bedrock_client():
     return _bedrock_client
 
 
+def _get_hf_client() -> Optional[InferenceClient]:
+    """Lazily build a Hugging Face Inference client if an API key is configured"""
+    global _hf_client
+    token = os.getenv("HUGGINGFACE_API_KEY")
+    if not token:
+        return None
+    if _hf_client is None:
+        _hf_client = InferenceClient(model=HF_MODEL_ID, token=token, provider=HF_PROVIDER)
+    return _hf_client
+
+
+def _call_hf(prompt: str, system: Optional[str], max_tokens: int, temperature: float) -> str:
+    client = _get_hf_client()
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    response = client.chat_completion(messages=messages, max_tokens=max_tokens, temperature=temperature)
+    return response.choices[0].message.content
+
+
 def _resolve_model_id(model_alias: str) -> str:
     alias = model_alias if model_alias in _MODEL_ALIAS_ENV_KEYS else "amazon.nova-micro"
     env_key = _MODEL_ALIAS_ENV_KEYS[alias]
@@ -76,7 +103,17 @@ def _resolve_model_id(model_alias: str) -> str:
 
 def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Optional[str] = None,
              max_tokens: int = 1024, temperature: float = 0.2) -> str:
-    """Call AWS Bedrock model and return its text response"""
+    """Call the configured LLM and return its text response.
+
+    Prefers the Hugging Face Inference API (Qwen2.5-Coder-1.5B-Instruct) when
+    HUGGINGFACE_API_KEY is set, falling back to AWS Bedrock otherwise/on error.
+    """
+    if _get_hf_client() is not None:
+        try:
+            return _call_hf(prompt, system, max_tokens, temperature)
+        except Exception as e:
+            logger.warning(f"Hugging Face inference failed, falling back to Bedrock: {e}")
+
     model_id = _resolve_model_id(model_alias)
     client = _get_bedrock_client()
 

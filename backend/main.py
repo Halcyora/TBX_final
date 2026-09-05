@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 FASTAPI_HOST = os.getenv("FASTAPI_HOST", "localhost")
 FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 8000))
-SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_MINUTES", 60))
+SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_MINUTES", 60 * 24 * 30))  # 1 month
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.60))
 SESSION_STORE_PATH = os.getenv("SESSION_STORE_PATH", "./data/sessions_store.json")
 
@@ -83,6 +83,9 @@ class AutocompleteRequest(BaseModel):
 
 class AutocompleteResponse(BaseModel):
     suggestions: List[str]
+
+class DatasetSwitchRequest(BaseModel):
+    dataset: str  # 'small' or 'large'
 
 # ============================================================================
 # IN-MEMORY SESSION MANAGER (Redis removed for local/dev use; see PRODUCTION.md)
@@ -268,11 +271,19 @@ except Exception as e:
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    try:
+        db = get_db()
+        data_source = "mysql" if db.mysql_config else f"csv ({db.dataset})"
+        db_ok = True
+    except Exception:
+        data_source = "unavailable"
+        db_ok = False
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "session_backend": "in-memory",
-        "database_initialized": True
+        "database_initialized": db_ok,
+        "data_source": data_source
     }
 
 @app.post("/sessions/create", response_model=Dict[str, str])
@@ -578,10 +589,7 @@ async def autocomplete(request: AutocompleteRequest):
     bank_ctx = ", ".join(ctx["banks"]) if ctx["banks"] else "First National Bank, Metro Bank"
     account_ctx = ", ".join(ctx["accounts"]) if ctx["accounts"] else "1001-2345, 2002-6789"
 
-    # Try Bedrock amazon.nova-micro-v1:0
-    try:
-        bedrock = get_bedrock_autocomplete_client()
-        prompt = f"""You are a sentence autocomplete engine for a financial analytics dashboard.
+    prompt = f"""You are a sentence autocomplete engine for a financial analytics dashboard.
 Database Context:
 - Banks: {bank_ctx}
 - Accounts: {account_ctx}
@@ -596,6 +604,21 @@ Rules:
 3. Keep sentences short and clear (5 to 15 words).
 4. Return ONLY a valid JSON array of strings containing 1-3 completion sentences, e.g. ["{query} ..."]. Do NOT include markdown codeblocks or extra prose."""
 
+    def _parse_suggestions(output_text: str) -> List[str]:
+        output_text = output_text.strip()
+        if "```" in output_text:
+            output_text = output_text.split("```")[1]
+            if output_text.startswith("json"):
+                output_text = output_text[4:]
+            output_text = output_text.strip()
+        parsed = json.loads(output_text)
+        if isinstance(parsed, list):
+            return [str(s).strip() for s in parsed if isinstance(s, str) and s.strip()]
+        return []
+
+    # Use Bedrock amazon.nova-micro-v1:0
+    try:
+        bedrock = get_bedrock_autocomplete_client()
         response = await asyncio.to_thread(
             bedrock.converse,
             modelId="amazon.nova-micro-v1:0",
@@ -603,18 +626,10 @@ Rules:
             inferenceConfig={"maxTokens": 120, "temperature": 0.2}
         )
 
-        output_text = response["output"]["message"]["content"][0]["text"].strip()
-        if "```" in output_text:
-            output_text = output_text.split("```")[1]
-            if output_text.startswith("json"):
-                output_text = output_text[4:]
-            output_text = output_text.strip()
-
-        parsed = json.loads(output_text)
-        if isinstance(parsed, list):
-            valid = [str(s).strip() for s in parsed if isinstance(s, str) and s.strip()]
-            if valid:
-                return AutocompleteResponse(suggestions=valid[:4])
+        output_text = response["output"]["message"]["content"][0]["text"]
+        valid = _parse_suggestions(output_text)
+        if valid:
+            return AutocompleteResponse(suggestions=valid[:4])
     except Exception as e:
         logger.warning(f"Bedrock amazon.nova-micro-v1:0 autocomplete warning: {e}")
 
@@ -649,11 +664,45 @@ async def get_schema():
         
         return {
             "schema": schema,
-            "tables": list(schema.keys())
+            "tables": list(schema.keys()),
+            "data_source": "mysql" if db.mysql_config else f"csv ({db.dataset})"
         }
     
     except Exception as e:
         logger.error(f"Schema endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/dataset")
+async def get_dataset():
+    """Get the currently active dataset/data source and row counts"""
+    try:
+        db = get_db()
+        stats = db.get_dataset_stats()
+        return {
+            "data_source": "mysql" if db.mysql_config else f"csv ({db.dataset})",
+            **stats
+        }
+    except Exception as e:
+        logger.error(f"Dataset endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dataset/switch")
+async def switch_dataset(request: DatasetSwitchRequest):
+    """Switch between the small and large CSV datasets (same request/response format
+    as the rest of the API). Not applicable when connected to a live MySQL database."""
+    try:
+        db = get_db()
+        db.switch_dataset(request.dataset)
+        stats = db.get_dataset_stats()
+        return {
+            "message": f"Switched to '{request.dataset}' dataset",
+            "data_source": f"csv ({db.dataset})",
+            **stats
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Dataset switch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================

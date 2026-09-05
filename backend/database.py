@@ -4,37 +4,92 @@ Handles financial data loading and query execution
 Schema: bank, account, transaction (TBX Finance Assistant)
 """
 
+import os
 import duckdb
 from pathlib import Path
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
 class FinanceDB:
-    """DuckDB wrapper for TBX financial data queries"""
+    """DuckDB wrapper for TBX financial data queries.
+
+    Data source is either local CSVs (default, for dev/small/large datasets) or a live
+    MySQL instance if MYSQL_HOST/MYSQL_USER/MYSQL_DATABASE env vars are set - useful for
+    final verification against a judge-provided database with the same bank/account/
+    transaction schema. DuckDB's mysql extension attaches the remote DB and we expose it
+    through views named bank/account/transaction, so SQL generation/validation code
+    (which only knows about those three unqualified table names) needs no changes.
+    """
     
     def __init__(self, db_path: str = "./data/finance.db", dataset: str = "small"):
         """
         Initialize database connection
         Args:
             db_path: Path to DuckDB database file
-            dataset: 'small' (10 records) or 'large' (500k+ records)
+            dataset: 'small' (10 records) or 'large' (500k+ records), ignored if MySQL is configured
         """
         self.db_path = db_path
         self.dataset = dataset
         self.conn = None
+        self.mysql_config = self._read_mysql_config()
         self.initialize()
+
+    @staticmethod
+    def _read_mysql_config() -> Optional[Dict[str, str]]:
+        """Read MySQL connection settings from env vars, if a host+user+database are provided"""
+        host = os.getenv("MYSQL_HOST")
+        user = os.getenv("MYSQL_USER")
+        database = os.getenv("MYSQL_DATABASE")
+        if not (host and user and database):
+            return None
+        return {
+            "host": host,
+            "port": os.getenv("MYSQL_PORT", "3306"),
+            "user": user,
+            "password": os.getenv("MYSQL_PASSWORD", ""),
+            "database": database,
+        }
     
     def initialize(self):
-        """Initialize DuckDB connection and load data"""
+        """Initialize DuckDB connection and load data (from MySQL if configured, else CSV)"""
         try:
             self.conn = duckdb.connect(self.db_path, read_only=False)
             logger.info(f"Connected to DuckDB: {self.db_path}")
-            self._load_data_from_csv()
+            if self.mysql_config:
+                self._load_data_from_mysql()
+            else:
+                self._load_data_from_csv()
             logger.info("Data loaded successfully")
         except Exception as e:
             logger.error(f"Failed to initialize DuckDB: {e}")
+            raise
+
+    def _load_data_from_mysql(self):
+        """Attach a live MySQL database via DuckDB's mysql extension and expose its
+        bank/account/transaction tables as views of the same name, for final verification
+        against a real judge-provided database instead of the bundled CSV datasets."""
+        cfg = self.mysql_config
+        logger.info(f"Connecting to MySQL at {cfg['host']}:{cfg['port']}/{cfg['database']} for final verification")
+
+        try:
+            self.conn.execute("INSTALL mysql")
+            self.conn.execute("LOAD mysql")
+
+            conn_string = (
+                f"host={cfg['host']} port={cfg['port']} user={cfg['user']} "
+                f"passwd={cfg['password']} db={cfg['database']}"
+            )
+            self.conn.execute(f"ATTACH '{conn_string}' AS mysqldb (TYPE mysql)")
+
+            for table_name in ("bank", "account", "transaction"):
+                self.conn.execute(f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM mysqldb.{table_name}")
+                row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                logger.info(f"  ✓ Attached {table_name} from MySQL: {row_count:,} rows")
+
+        except Exception as e:
+            logger.error(f"Failed to attach MySQL database: {e}")
             raise
     
     def _load_data_from_csv(self):
@@ -135,7 +190,7 @@ class FinanceDB:
         """Get statistics about the currently loaded dataset"""
         try:
             stats = {
-                "dataset": self.dataset,
+                "dataset": "mysql" if self.mysql_config else self.dataset,
                 "bank_count": self.execute_scalar("SELECT COUNT(*) FROM bank"),
                 "account_count": self.execute_scalar("SELECT COUNT(*) FROM account"),
                 "transaction_count": self.execute_scalar("SELECT COUNT(*) FROM transaction"),
@@ -148,7 +203,9 @@ class FinanceDB:
             return {}
     
     def switch_dataset(self, dataset: str = "large"):
-        """Switch between small and large dataset"""
+        """Switch between small and large CSV dataset. Not applicable when connected to MySQL."""
+        if self.mysql_config:
+            raise ValueError("Cannot switch CSV dataset while connected to a live MySQL database")
         if dataset not in ["small", "large"]:
             raise ValueError("Dataset must be 'small' or 'large'")
         
