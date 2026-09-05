@@ -2,6 +2,8 @@
 
 **Conversational AI Assistant for Financial Data Queries**
 
+> 📚 **Full Documentation Index**: See [DOCS.md](DOCS.md) for all documentation files and quick reference guides
+
 ## Overview
 
 A sophisticated finance assistant that understands natural language questions about financial data and returns accurate, grounded answers. Built with LangGraph, Amazon Nova Micro, FastAPI, and DuckDB.
@@ -13,7 +15,7 @@ A sophisticated finance assistant that understands natural language questions ab
 - 🚨 **Anomaly Detection**: Hybrid approach (statistical + ML + business rules)
 - 📈 **Confidence Signaling**: Transparent about answer certainty
 - 💾 **Data Export**: CSV breakdown tables
-- ⚡ **Lightweight Models**: Runs on AWS Nova Micro (1.3B params) via AWS Bedrock
+- 🔐 **Account Encryption**: Sensitive account data encrypted by default
 
 ## Architecture
 
@@ -101,44 +103,38 @@ tbx_finance_assistant/
 ## Setup Instructions
 
 ### Prerequisites
-- Python 3.10+
-- Node.js 18+ (for frontend)
-- Redis (or Docker)
-- AWS Account with Bedrock access
+- Python 3.10+, Node.js 18+
+- AWS Account (Bedrock)
+- MySQL optional
 
-### 1. Environment Setup
+### Quick Start
 
+**Backend:**
 ```bash
-# Clone repo
-cd TBX_final
-
-# Create Python venv
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Copy env template
-cp .env.example .env
-
-# Edit .env with your credentials
-nano .env
-```
-
-### 2. Backend Setup
-
-```bash
-# Install dependencies
+venv\Scripts\activate  # Windows or source venv/bin/activate (Mac/Linux)
 cd backend
 pip install -r requirements.txt
+python main.py  # Runs on http://localhost:8000
+```
 
-# Start Redis (using Docker)
-docker run -d -p 6379:6379 redis:latest
+**Frontend:**
+```bash
+cd frontend
+npm install
+npm run dev  # Runs on http://localhost:3000
+```
 
-# Run FastAPI
-python main.py
+**Configuration:**
+1. Copy `.env.example` → `.env`
+2. Add AWS credentials (HUGGINGFACE_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)
+3. Encryption auto-configured with ENCRYPTION_KEY & DECRYPTION_CODES
+
+See [DOCS.md](DOCS.md) for detailed setup by role
 # Server available at http://localhost:8000
 ```
 
-### 3. Frontend Setup
+### 4. Frontend Setup
 
 ```bash
 # Install dependencies
@@ -150,14 +146,45 @@ npm run dev
 # UI available at http://localhost:3000
 ```
 
-### 4. Database Initialization
+### 5. Database Initialization
 
-DuckDB will auto-load CSV files from `./data/` directory on first run.
+DuckDB automatically loads CSV files from `./data/` and encrypts account numbers on startup.
 
 ```bash
 # Verify database
-python -c "from database import get_db; db = get_db(); print(db.conn.execute('SELECT COUNT(*) FROM transactions').fetchone())"
+python -c "from database import get_db; db = get_db(); print('Database ready')"
 ```
+
+## Security Feature: Account Number Encryption ✨
+
+**All account numbers are encrypted in the database and masked in query results.**
+
+### How It Works
+1. 🔒 Account numbers are automatically encrypted when data loads
+2. 📊 Query results show masked numbers (e.g., `****3729069`)
+3. 🔓 Decrypt via frontend UI or `/decrypt` API with your code
+4. ✅ Only valid decryption codes can reveal account numbers
+
+### For End Users (Frontend)
+1. Run a query that returns account data
+2. Enter your decryption code in the "Decryption Panel"
+3. Click "Decrypt" button next to encrypted account numbers
+4. Account numbers are revealed
+
+### For Evaluators/API Users
+```bash
+# After getting query results with account_number_encrypted field:
+curl -X POST http://localhost:8000/decrypt \
+  -H "Content-Type: application/json" \
+  -d '{
+    "encrypted_account_number": "gAAAAABl9sX5...",
+    "decryption_code": "judge_code"
+  }'
+# Returns: {"success": true, "account_number": "50200013729069"}
+```
+
+**📖 See [JUDGE_DECRYPTION_GUIDE.md](JUDGE_DECRYPTION_GUIDE.md) for quick reference**  
+**📚 See [ACCOUNT_ENCRYPTION.md](ACCOUNT_ENCRYPTION.md) for technical details**
 
 ## Usage
 

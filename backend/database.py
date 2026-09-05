@@ -9,6 +9,7 @@ import duckdb
 from pathlib import Path
 from typing import Any, List, Dict, Optional
 import logging
+from encryption import AccountEncryption
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,12 @@ class FinanceDB:
             raise
 
     def _load_data_from_mysql(self):
-        """Attach a live MySQL database via DuckDB's mysql extension and expose its
-        bank/account/transaction tables as views of the same name, for final verification
-        against a real judge-provided database instead of the bundled CSV datasets."""
+        """Attach a live MySQL database via DuckDB's mysql extension and copy its
+        bank/account/transaction tables into local DuckDB tables of the same name, for final
+        verification against a real judge-provided database instead of the bundled CSV
+        datasets. We materialize a snapshot (same pattern as CSV loading) rather than
+        exposing live views, since aggregate queries against live mysql-scanner views hit a
+        known DuckDB internal error (count_star() binding failure) with this extension."""
         cfg = self.mysql_config
         logger.info(f"Connecting to MySQL at {cfg['host']}:{cfg['port']}/{cfg['database']} for final verification")
 
@@ -77,16 +81,28 @@ class FinanceDB:
             self.conn.execute("INSTALL mysql")
             self.conn.execute("LOAD mysql")
 
-            conn_string = (
-                f"host={cfg['host']} port={cfg['port']} user={cfg['user']} "
-                f"passwd={cfg['password']} db={cfg['database']}"
-            )
+            conn_parts = [f"host={cfg['host']}", f"port={cfg['port']}", f"user={cfg['user']}", f"db={cfg['database']}"]
+            if cfg["password"]:
+                conn_parts.insert(3, f"passwd={cfg['password']}")
+            conn_string = " ".join(conn_parts)
             self.conn.execute(f"ATTACH '{conn_string}' AS mysqldb (TYPE mysql)")
 
             for table_name in ("bank", "account", "transaction"):
-                self.conn.execute(f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM mysqldb.{table_name}")
+                for drop_stmt in (f"DROP VIEW IF EXISTS {table_name}", f"DROP TABLE IF EXISTS {table_name}"):
+                    try:
+                        self.conn.execute(drop_stmt)
+                    except Exception:
+                        pass  # object doesn't exist or is the other kind - safe to ignore
+                self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM mysqldb.{table_name}")
                 row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                logger.info(f"  ✓ Attached {table_name} from MySQL: {row_count:,} rows")
+                logger.info(f"  ✓ Loaded {table_name} from MySQL: {row_count:,} rows")
+                
+                # Encrypt account numbers after loading from MySQL
+                if table_name == "account":
+                    self._encrypt_account_numbers()
+
+            self.conn.execute("DETACH mysqldb")
+            self._create_indexes()
 
         except Exception as e:
             logger.error(f"Failed to attach MySQL database: {e}")
@@ -121,6 +137,10 @@ class FinanceDB:
                         SELECT * FROM read_csv_auto('{csv_path}', ALL_VARCHAR=TRUE)
                     """)
                     
+                    # Encrypt account numbers if this is the account table
+                    if table_name == "account":
+                        self._encrypt_account_numbers()
+                    
                     # Get row count
                     row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
                     logger.info(f"  ✓ Loaded {table_name}: {row_count:,} rows")
@@ -134,6 +154,25 @@ class FinanceDB:
         
         # Create useful indexes for faster queries
         self._create_indexes()
+    
+    def _encrypt_account_numbers(self):
+        """Encrypt account numbers in the account table"""
+        try:
+            # Get all account numbers
+            rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
+            
+            # Encrypt each account number and update the table
+            for account_id, account_number in rows:
+                encrypted = AccountEncryption.encrypt_account_number(account_number)
+                self.conn.execute(
+                    "UPDATE account SET account_number = ? WHERE account_id = ?",
+                    (encrypted, account_id)
+                )
+            
+            logger.info(f"  ✓ Encrypted {len(rows)} account numbers in the database")
+        except Exception as e:
+            logger.error(f"Failed to encrypt account numbers: {e}")
+            raise
     
     def _create_indexes(self):
         """Create indexes on commonly queried columns"""
@@ -171,6 +210,30 @@ class FinanceDB:
         except Exception as e:
             logger.error(f"Scalar query failed: {e}\nSQL: {sql}")
             raise
+    
+    @staticmethod
+    def mask_query_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Mask account numbers in query results for display.
+        Keeps encrypted account numbers for decryption but masks them in the display."""
+        if not results:
+            return results
+        
+        masked_results = []
+        for row in results:
+            masked_row = row.copy()
+            
+            # Check if this row has an account_number field (encrypted)
+            if "account_number" in masked_row:
+                account_num = masked_row["account_number"]
+                # Mask it for display
+                masked_row["account_number_display"] = AccountEncryption.mask_account_number(account_num)
+                # Keep encrypted version for API decryption
+                masked_row["account_number_encrypted"] = account_num
+                # Remove plain field - now it's the encrypted one
+            
+            masked_results.append(masked_row)
+        
+        return masked_results
     
     def get_schema_info(self) -> Dict[str, List[str]]:
         """Get schema information for TBX tables"""

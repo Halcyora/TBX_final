@@ -19,7 +19,7 @@ bank:
 account:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
 - entity_id (VARCHAR): Customer/entity that owns this account (UUID)
-- account_number (VARCHAR): Account number (SENSITIVE - mask in output)
+- account_number (VARCHAR): Account number (SENSITIVE - encrypted in database, masked in display)
 - program_id (VARCHAR): Program/product ID (0, 4, 21, 46, 99)
 - available_balance (VARCHAR): Account balance (can be negative, zero, or extreme values)
 - bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code

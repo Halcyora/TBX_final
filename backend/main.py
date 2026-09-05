@@ -21,6 +21,7 @@ import boto3
 from langgraph_flow import build_finance_graph, FinanceAssistantState
 from tools import ContextManager, DataExporter
 from database import get_db
+from encryption import AccountEncryption
 
 # Load environment variables
 load_dotenv()
@@ -77,6 +78,15 @@ class SessionInfo(BaseModel):
 class ExportRequest(BaseModel):
     session_id: str
     format: str = "csv"
+
+class DecryptRequest(BaseModel):
+    encrypted_account_number: str
+    decryption_code: str
+
+class DecryptResponse(BaseModel):
+    success: bool
+    account_number: Optional[str] = None
+    error: Optional[str] = None
 
 class AutocompleteRequest(BaseModel):
     query: str
@@ -524,6 +534,27 @@ async def export_data(request: ExportRequest):
     except Exception as e:
         logger.error(f"Export error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/decrypt", response_model=DecryptResponse)
+async def decrypt_account(request: DecryptRequest):
+    """Decrypt an encrypted account number using a valid decryption code.
+    The judge/evaluator provides the decryption code to unlock account numbers."""
+    try:
+        success, result = AccountEncryption.decrypt_with_code(
+            request.encrypted_account_number,
+            request.decryption_code
+        )
+        
+        if success:
+            logger.info(f"Account number decrypted successfully")
+            return DecryptResponse(success=True, account_number=result)
+        else:
+            logger.warning(f"Failed to decrypt account number: {result}")
+            return DecryptResponse(success=False, error=result)
+    
+    except Exception as e:
+        logger.error(f"Decrypt endpoint error: {e}")
+        return DecryptResponse(success=False, error=str(e))
 
 _bedrock_autocomplete_client = None
 

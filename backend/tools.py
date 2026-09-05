@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 import pandas as pd
 
-from database import get_db
+from database import get_db, FinanceDB
 from sql_validator import SQLValidator, QueryResultValidator
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,8 @@ class QueryExecutor:
         try:
             db = get_db()
             results = db.execute_query(sql)
+            # Mask account numbers for security (keep encrypted values for decryption API)
+            results = FinanceDB.mask_query_results(results)
             logger.info(f"Query executed successfully, returned {len(results)} rows")
             return True, results
         

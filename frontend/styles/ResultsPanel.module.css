@@ -261,3 +261,109 @@
 .exportButton:hover {
   background: #43a047;
 }
+
+.exportButton:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+/* Encrypted cell and decryption styles */
+.encryptedCell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  min-width: 200px;
+}
+
+.encrypted {
+  font-family: 'Courier New', monospace;
+  font-size: 0.7rem;
+  color: #999;
+  word-break: break-all;
+  flex: 1;
+  min-width: 100px;
+}
+
+.decrypted {
+  font-weight: 600;
+  color: #155724;
+  font-family: monospace;
+}
+
+.decryptBtn {
+  padding: 0.25rem 0.6rem;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.decryptBtn:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.decryptBtn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+/* Decryption Panel */
+.decryptionPanel {
+  background: #f0f4ff;
+  border: 1px solid #c5d3ff;
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin: 0.75rem 0 0 0;
+}
+
+.decryptionPanel h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.decryptionInfo {
+  font-size: 0.8rem;
+  color: #555;
+  margin: 0 0 0.5rem 0;
+}
+
+.decryptionForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.decryptionInput {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #b8c9ff;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: monospace;
+}
+
+.decryptionInput:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+.decryptError {
+  display: block;
+  font-size: 0.8rem;
+  color: #d32f2f;
+  margin-top: 0.25rem;
+}
+
+.decryptSuccess {
+  display: block;
+  font-size: 0.8rem;
+  color: #155724;
+  margin-top: 0.25rem;
+}

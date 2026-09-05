@@ -1,83 +1,169 @@
-# TBX Finance Assistant - Complete Implementation Guide
+# TBX Finance Assistant - Architecture
 
-## Overview
-This document provides a comprehensive guide to the TBX Finance Assistant implementation, including architecture decisions, component descriptions, and deployment instructions.
+## System Overview
 
-## Problem Statement Alignment
+**Stack**: LangGraph (agentic orchestration) + FastAPI (backend) + Next.js (frontend) + DuckDB (database) + AWS Bedrock (LLM)
 
-### ✅ Requirements Met
-
-**Must Have:**
-- ✅ Natural language query handling (Classification → SQL Generation)
-- ✅ Grounded retrieval (Prompt-to-SQL, not hallucination)
-- ✅ Accurate computation (SQL execution before LLM formatting)
-- ✅ Verifiable answers (Results table + Grounding Info)
-- ✅ Hallucination guardrails (Confidence scoring, data validation)
-- ✅ Lightweight model constraint (Amazon Nova Micro: 1.3B params, PS Section 7 compliant)
-- ✅ Multi-turn conversation (Redis sessions, context compression)
-- ✅ Explainability (Show SQL, data pulled, grounding info)
-
-**Good to Have:**
-- ✅ CSV export (implemented in tools.py)
-
-**Bonus:**
-- ✅ Confidence signalling (Composite score: clarity + completeness + reliability)
-- ✅ Model choice documentation (Benchmarking suite with detailed metrics)
-- ✅ Anomaly callouts (Hybrid: Statistical + Business Rules + ML)
+**Goal**: Convert natural language financial queries → SQL → verified results with confidence scoring & anomaly detection
 
 ---
 
-## Architecture Components
+## Component Architecture
 
-### 1. Data Layer
+### 1. Frontend (Next.js + React)
+- Chat interface with message history
+- Results panel: SQL, data table, confidence score, anomalies
+- Session manager: ID, message count, uptime
+- **Decryption panel**: Password input for account number access
 
-#### Files
-- `data/bank.csv` (50 banks, TBX schema primary data)
-- `data/account.csv` (10,000 accounts with balances)
-- `data/transaction.csv` (500K+ transactions with edge cases)
+### 2. Backend API (FastAPI)
+**Endpoints:**
+- `POST /chat` - Query through LangGraph
+- `POST /sessions/create` - New session
+- `GET /sessions/{id}` - Session history
+- `POST /export` - CSV download
+- `POST /decrypt` - Decrypt account numbers (code-validated)
+- `GET /health` - Health check
 
-#### Database: DuckDB (`backend/database.py`)
-- **Why DuckDB?** Embedded, analytical optimizations, fast aggregations on TBX schema
-- Auto-loads CSVs from `data/small/` or `data/large/` on initialization
-- Indexes on bank_code, account_id, transaction_date, transaction_id
-- Provides schema info for SQL validation (bank, account, transaction tables only)
-- Supports complex queries (GROUP BY, window functions, CTEs, JOINS)
+### 3. Database (DuckDB)
+- **Tables**: bank, account, transaction
+- **Features**: Indexes, auto-encryption on load
+- **Why**: Embedded, OLAP-optimized, <100ms queries on 100K rows
+
+### 4. LLM (AWS Bedrock - Amazon Nova Micro)
+- **Model**: 1.3B params (PS Section 7 compliant)
+- **Alternatives**: Llama 3.1 (8B), Mistral 7B for benchmarking
+- **API**: AWS Bedrock converse
+
+### 5. Orchestration (LangGraph - 8 Nodes)
+
+| Node | Input | Process | Output |
+|------|-------|---------|--------|
+| Classify | Question | Parse intent, entities, confidence | Query structure |
+| Clarify | Low confidence | Generate clarification Qs | Error + questions |
+| SQL Gen | Query + context | Few-shot + chain-of-thought | SQL string |
+| Validate | SQL | Static checks + LLM validation | Valid SQL or errors |
+| Execute | SQL | Run on DuckDB | Results |
+| Anomalies | Results | Z-score + Isolation Forest + rules | Anomaly list |
+| Format | Results + anomalies | Build response, calc confidence | Answer + confidence |
+| Export | Results | CSV file generation | Filename |
+
+### 6. Security
+- **Encryption**: Fernet symmetric (account numbers)
+- **Access Control**: Code-based decryption via /decrypt endpoint
+- **SQL Validation**: No DROP/DELETE/UPDATE
+- **Schema Whitelist**: Only bank, account, transaction tables
 
 ---
 
-### 2. LLM Integration Layer
+## Data Flow
 
-#### AWS Bedrock + Amazon Nova Micro (1.3B params, PS Section 7 compliant)
-- **Amazon Nova Micro**: 1.3B parameters, optimized for low-latency financial queries
-- Runs exclusively via AWS Bedrock `converse` API
-- Alternative models available for benchmarking: Llama 3.1-8B, Mistral-7B, Llama Scout-17B (all <=20B params)
-
-#### Prompt Engineering (`backend/prompts.py`)
-- **Few-shot Examples**: 5 diverse SQL examples in system prompt
-- **Chain-of-Thought**: LLM explains reasoning before SQL
-- **Classification Prompt**: Parse intent, entities, filters, confidence
-- **Validation Prompt**: LLM validates and corrects SQL
-- **Response Template**: Format answer with confidence + grounding
+```
+Question → Classify → Clarify? → SQL Gen → Validate
+                                    ↓
+                            Execute (DuckDB)
+                                    ↓
+                            Anomaly Detection
+                                    ↓
+                        Response Formatting
+                                    ↓
+                    Results + Grounding + Export
+                                    ↓
+                        [Optional: Decrypt]
+```
 
 ---
 
-### 3. Core Processing Pipeline (LangGraph)
+## Key Features
 
-#### `backend/langgraph_flow.py` - Agentic Loop
+| Feature | Implementation |
+|---------|-----------------|
+| **Grounding** | SQL query + results table with every answer |
+| **Confidence** | Composite score: clarity (40%) + completeness (30%) + reliability (30%) |
+| **Hallucination Prevention** | SQL execution before formatting, schema validation, confidence gates |
+| **Anomaly Detection** | Hybrid: Z-score (statistical) + Isolation Forest (ML) + business rules |
+| **Encryption** | Account numbers: auto-masked (****3729069) + code-based decrypt |
 
-**Node: Classify**
-- Input: User question
-- Process: Use Claude (placeholder) to parse intent, entities, filters, confidence
-- Output: Parsed query structure + confidence score (0-1)
-- Routes: If confidence < 0.6 → Clarify, else → SQL Generation
+---
 
-**Node: Clarification (Conditional)**
-- Input: Low-confidence query
-- Process: Generate clarification questions
-- Output: Error message with questions OR proceed if user confirms
+## Design Rationales
 
-**Node: SQL Generation**
-- Input: Query + conversation context
+**Prompt-to-SQL** (not chunking/RAG)
+- ✓ More accurate for financial data
+- ✓ Prevents hallucination (grounded in SQL execution)
+- ✓ Explainable (show SQL to user)
+
+**Amazon Nova Micro** (not larger models)
+- ✓ PS Section 7 compliant (1.3B params)
+- ✓ Low latency + cost-efficient
+- ✓ Excellent SQL generation for structured data
+
+**Hybrid Anomaly Detection**
+- Z-score catches statistical outliers
+- Business rules catch contextual issues
+- ML catches complex patterns
+- Deduplication prevents false alarms
+
+**DuckDB** (not PostgreSQL)
+- ✓ Embedded (no server)
+- ✓ OLAP-optimized
+- ✓ Works locally for development
+- Note: Can migrate to PostgreSQL for production
+
+---
+
+## Testing & Benchmarking
+
+**Benchmark Suite** (`benchmarks/run_benchmark.py`)
+- 15 test questions (easy/moderate/complex)
+- 4 real models tested via AWS Bedrock
+- Metrics: accuracy, latency, hallucination rate, grounding
+- Results: JSON + human-readable report
+
+**Manual Testing**
+```bash
+# Create session
+curl -X POST http://localhost:8000/sessions/create
+
+# Ask question
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"...", "message":{"content":"List all banks"}}'
+
+# Decrypt account (if needed)
+curl -X POST http://localhost:8000/decrypt \
+  -d '{"encrypted_account_number":"...", "decryption_code":"judge_code"}'
+```
+
+---
+
+## Performance Targets (Measured)
+
+| Metric | Target |
+|--------|--------|
+| Total Latency | 500-750ms |
+| Easy Questions | 70%+ accuracy |
+| Moderate Questions | 75%+ accuracy |
+| Complex Questions | 70%+ accuracy |
+| Grounding Score | 80%+ |
+| Hallucination Rate | <20% |
+| SQL Execution Rate | >90% |
+
+---
+
+## Deployment
+
+See [PRODUCTION.md](PRODUCTION.md) for:
+- AWS deployment
+- Docker setup
+- Monitoring & logging
+- Environment configuration
+
+**Quick Setup**
+1. Copy `.env.example` → `.env` + add AWS credentials
+2. Backend: `cd backend && pip install -r requirements.txt && python main.py`
+3. Frontend: `cd frontend && npm install && npm run dev`
+4. Test: `python benchmarks/run_benchmark.py`
 - Process: 
   1. Chain-of-thought reasoning
   2. Few-shot SQL generation

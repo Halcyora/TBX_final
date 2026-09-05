@@ -8,9 +8,18 @@ interface ResultsPanelProps {
 
 export default function ResultsPanel({ result }: ResultsPanelProps) {
   const rows = result.query_results || [];
-  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  // Filter out account_number_display since we handle it via encrypted cell
+  const allColumns = rows.length > 0 ? Object.keys(rows[0]) : [];
+  const columns = allColumns.filter((col) => col !== 'account_number_display');
   const [exporting, setExporting] = useState(false);
   const [showGrounding, setShowGrounding] = useState(false);
+  const [decryptionCode, setDecryptionCode] = useState('');
+  const [decryptedValues, setDecryptedValues] = useState<Record<string, string>>({});
+  const [decryptingIndex, setDecryptingIndex] = useState<number | null>(null);
+  const [decryptError, setDecryptError] = useState<string | null>(null);
+
+  // Check if any rows have encrypted account numbers
+  const hasEncryptedAccounts = rows.some((row) => row.account_number_encrypted);
 
   const anomaliesById = new Map(
     (result.anomalies_detected || []).map((a) => [String(a.transaction_id), a])
@@ -50,6 +59,45 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
     }
   };
 
+  const handleDecrypt = async (rowIndex: number, encryptedValue: string) => {
+    if (!decryptionCode.trim()) {
+      setDecryptError('Please enter a decryption code');
+      return;
+    }
+
+    setDecryptingIndex(rowIndex);
+    setDecryptError(null);
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/decrypt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          encrypted_account_number: encryptedValue,
+          decryption_code: decryptionCode,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Decryption failed');
+
+      const data = await response.json();
+      if (data.success) {
+        setDecryptedValues((prev) => ({
+          ...prev,
+          [rowIndex]: data.account_number,
+        }));
+        setDecryptError(null);
+      } else {
+        setDecryptError(data.error || 'Decryption failed');
+      }
+    } catch (error) {
+      console.error('Decryption error:', error);
+      setDecryptError('Failed to decrypt. Please try again.');
+    } finally {
+      setDecryptingIndex(null);
+    }
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
@@ -84,14 +132,72 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
                 return (
                   <tr key={idx} className={anomaly ? styles[`anomalyRow_${anomaly.severity}`] : undefined} title={anomaly?.reason}>
                     {idColumn && <td className={styles.anomalyFlag}>{anomaly ? '🚨' : ''}</td>}
-                    {columns.map((col) => (
-                      <td key={col}>{formatCellValue(row[col])}</td>
-                    ))}
+                    {columns.map((col) => {
+                      // Handle account_number_encrypted specially
+                      if (col === 'account_number_encrypted') {
+                        const decrypted = decryptedValues[idx];
+                        return (
+                          <td key={col} className={styles.encryptedCell}>
+                            {decrypted ? (
+                              <span className={styles.decrypted}>{decrypted}</span>
+                            ) : (
+                              <>
+                                <span className={styles.encrypted}>{formatCellValue(row[col])}</span>
+                                <button
+                                  className={styles.decryptBtn}
+                                  onClick={() => handleDecrypt(idx, row[col])}
+                                  disabled={decryptingIndex === idx || !decryptionCode.trim()}
+                                  title="Click to decrypt with your code"
+                                >
+                                  {decryptingIndex === idx ? '🔓 ...' : '🔒 Decrypt'}
+                                </button>
+                              </>
+                            )}
+                          </td>
+                        );
+                      }
+                      return <td key={col}>{formatCellValue(row[col])}</td>;
+                    })}
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {hasEncryptedAccounts && (
+        <div className={styles.decryptionPanel}>
+          <h4>🔐 Decryption Panel</h4>
+          <p className={styles.decryptionInfo}>
+            This query contains encrypted account numbers. Enter your decryption code to reveal them.
+          </p>
+          <div className={styles.decryptionForm}>
+            <input
+              type="password"
+              placeholder="Enter your decryption code"
+              value={decryptionCode}
+              onChange={(e) => {
+                setDecryptionCode(e.target.value);
+                setDecryptError(null);
+              }}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && decryptingIndex === null) {
+                  // Decrypt the first encrypted value
+                  const firstEncrypted = rows.find((r) => r.account_number_encrypted);
+                  if (firstEncrypted) {
+                    const idx = rows.indexOf(firstEncrypted);
+                    handleDecrypt(idx, firstEncrypted.account_number_encrypted);
+                  }
+                }
+              }}
+              className={styles.decryptionInput}
+            />
+            {decryptError && <span className={styles.decryptError}>❌ {decryptError}</span>}
+            {Object.keys(decryptedValues).length > 0 && (
+              <span className={styles.decryptSuccess}>✅ Successfully decrypted {Object.keys(decryptedValues).length} account number(s)</span>
+            )}
+          </div>
         </div>
       )}
 
