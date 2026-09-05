@@ -184,7 +184,7 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
     
     try:
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
-        prompt = build_classification_prompt(state.user_query, history_context)
+        prompt = build_classification_prompt(state.user_query, history_context, entity_id=state.entity_id)
 
         response_text = await asyncio.to_thread(
             call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1

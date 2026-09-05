@@ -232,7 +232,7 @@ Now write the SQL query based on this reasoning:"""
 # ============================================================================
 # CLASSIFICATION PROMPT (Determine query type and confidence)
 # ============================================================================
-CLASSIFICATION_PROMPT = """{history_context}DATABASE SCHEMA (TBX Finance Assistant - for reference only, do not write SQL here):
+CLASSIFICATION_PROMPT = """{history_context}{entity_context}DATABASE SCHEMA (TBX Finance Assistant - for reference only, do not write SQL here):
 
 bank:
 - bank_code (VARCHAR, PRIMARY KEY): Bank code (e.g., HDFC, ICIC, SBIN, UTIB)
@@ -374,6 +374,13 @@ def build_cot_prompt(user_question: str, history_context: str = "", entity_id: s
         prompt += f"\n\nNote: Results must be restricted to entity_id = '{entity_id}' only."
     return prompt
 
-def build_classification_prompt(user_question: str, history_context: str = "") -> str:
-    """Build the query classification prompt, optionally grounded in prior conversation turns"""
-    return CLASSIFICATION_PROMPT.format(question=user_question, history_context=history_context)
+def build_classification_prompt(user_question: str, history_context: str = "", entity_id: str = None) -> str:
+    """Build the query classification prompt, optionally grounded in prior conversation turns and scoped to one entity_id"""
+    entity_context = (
+        f"The user has selected entity_id = '{entity_id}' in the UI. Treat pronouns like "
+        f"'its'/'their'/'this account' as referring to accounts owned by this entity, and do "
+        f"not ask for clarification on which account/entity - use entity_id = '{entity_id}' "
+        f"instead.\n\n"
+        if entity_id else ""
+    )
+    return CLASSIFICATION_PROMPT.format(question=user_question, history_context=history_context, entity_context=entity_context)
