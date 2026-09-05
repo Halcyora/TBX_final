@@ -39,11 +39,13 @@ class FinanceDB:
     
     def _load_data_from_csv(self):
         """Load CSV files into DuckDB tables from selected dataset"""
-        # Determine dataset directory
+        # Determine dataset directory. CSVs live in the repo-root ./data folder,
+        # not backend/data (which only holds finance.db + sessions_store.json).
+        repo_data_dir = Path(__file__).resolve().parent.parent / "data"
         if self.dataset == "large":
-            data_dir = Path("./data/large")
+            data_dir = repo_data_dir / "large"
         else:  # default to small
-            data_dir = Path("./data")
+            data_dir = repo_data_dir / "small"
         
         # TBX Schema: bank, account, transaction
         tables = {

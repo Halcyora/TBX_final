@@ -6,13 +6,11 @@ interface ResultsPanelProps {
   result: FinanceAnswer;
 }
 
-type TabId = 'grounding';
-
 export default function ResultsPanel({ result }: ResultsPanelProps) {
   const rows = result.query_results || [];
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   const [exporting, setExporting] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('grounding');
+  const [showGrounding, setShowGrounding] = useState(false);
 
   const anomaliesById = new Map(
     (result.anomalies_detected || []).map((a) => [String(a.transaction_id), a])
@@ -101,15 +99,15 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
         <div className={styles.section}>
           <div className={styles.tabBar}>
             <button
-              className={`${styles.tabButton} ${activeTab === 'grounding' ? styles.tabActive : ''}`}
-              onClick={() => setActiveTab('grounding')}
+              className={`${styles.tabButton} ${showGrounding ? styles.tabActive : ''}`}
+              onClick={() => setShowGrounding((prev) => !prev)}
               title="SQL query and data grounding information"
             >
-              📊 Grounding Info
+              📊 Grounding Info {showGrounding ? '▲' : '▼'}
             </button>
           </div>
 
-          {activeTab === 'grounding' && (
+          {showGrounding && (
             <>
               <pre><code>{result.grounding_info.sql_query}</code></pre>
               <p className={styles.groundingText}>

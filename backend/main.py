@@ -214,6 +214,14 @@ class SessionManager:
         summaries.sort(key=lambda s: s["last_message_at"], reverse=True)
         return summaries
 
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session permanently. Returns True if it existed."""
+        if session_id not in self._sessions:
+            return False
+        del self._sessions[session_id]
+        self._persist()
+        return True
+
 # ============================================================================
 # FASTAPI APP
 # ============================================================================
@@ -342,6 +350,26 @@ async def get_session_messages(session_id: str):
         raise
     except Exception as e:
         logger.error(f"Failed to get session messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a chat session permanently"""
+    try:
+        if not session_manager:
+            raise HTTPException(status_code=500, detail="Session service unavailable")
+        
+        deleted = session_manager.delete_session(session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        logger.info(f"Session deleted: {session_id}")
+        return {"message": "Session deleted successfully"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat", response_model=ChatResponse)

@@ -47,7 +47,8 @@ IMPORTANT RULES:
 6. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
 7. Return meaningful column names using AS aliases
 8. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
-9. Always think step-by-step before writing SQL.
+9. IMPORTANT - account_id vs account_number: account_id is an internal UUID (e.g. 'acfbe204-7541-492c-a352-040aa984bedc') and is almost NEVER what a user types in a question. account_number is the numeric string a user actually refers to (e.g. '50200013729069'). If the user's question gives a numeric/digit-string account value, filter on account_number. Only filter on account_id if the value is a UUID (contains hyphens in the 8-4-4-4-12 pattern) or the user explicitly says "account ID".
+10. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
@@ -83,6 +84,15 @@ FROM account a
 JOIN bank b ON a.bank_code = b.bank_code
 WHERE CAST(a.available_balance AS DECIMAL) < 0
 ORDER BY CAST(a.available_balance AS DECIMAL) ASC"""
+    },
+    {
+        "question": "What's the available balance for account 50200013729069?",
+        "reasoning": "The value '50200013729069' is a numeric digit-string, not a UUID, so it refers to account.account_number, NOT account.account_id",
+        "sql": """SELECT 
+    CAST(a.available_balance AS DECIMAL) as available_balance
+FROM account a
+WHERE a.account_number = '50200013729069'
+LIMIT 1"""
     },
     {
         "question": "How many credit vs debit transactions are there?",

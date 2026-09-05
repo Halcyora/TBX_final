@@ -424,7 +424,7 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
             logger.error(f"Execution error (not shown to user): {state.execution_error}")
             state.final_answer = (
                 "I wasn't able to retrieve that data. This question may not map to the "
-                "available financial data (vendor spend, payouts, reconciliation status), "
+                "available financial data (bank, account, or transaction records), "
                 "or something went wrong running the query. Please try rephrasing your question."
             )
             return state
