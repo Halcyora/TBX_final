@@ -373,12 +373,44 @@ four components) has never existed in git on *either* branch - `.gitignore`'s Py
 `lib/`/`lib64/` patterns unintentionally also matched `frontend/lib/`, so the frontend has never
 been buildable from a fresh clone. Both fixed in the merge below, independent of anything else.
 
-**Decision:** merge into a new branch off `accuracy-improvements` (the more mature, tested base),
-porting only: the MySQL ingestion *concept*, fixed and re-verified against the same local MySQL
-container until it actually completes; session delete + full-payload persistence; the
-`.gitignore`/`types.ts` fix; a couple of cosmetic `StepsList.tsx` improvements. Explicitly not
-ported: `origin/main`'s weaker crypto, its masking/judge-code UI, its blind LLM-self-review SQL
-step (this branch already replaced that anti-pattern in round 1), and its unguarded `SQLValidator`.
+**Decision:** merge into a new branch (`merged-solution`) off `accuracy-improvements` (the more
+mature, tested base), porting only: the MySQL ingestion *concept*, fixed and re-verified against
+the same local MySQL container until it actually completes; session delete + full-payload
+persistence; the `.gitignore`/`types.ts` fix; a couple of cosmetic `StepsList.tsx` improvements.
+Explicitly not ported: `origin/main`'s weaker crypto, its masking/judge-code UI, its blind
+LLM-self-review SQL step (this branch already replaced that anti-pattern in round 1), and its
+unguarded `SQLValidator`.
+
+**The teammate kept pushing to `origin/main` while this merge was in progress** - 4 more commits
+landed mid-session. Re-checked after each: one independently re-implemented the same
+execution-feedback repair idea this branch already has (a more mature version - separate graph
+node, bounded-retry state tracking - so not re-ported, but confirms two people converged on the
+same fix independently). Three genuinely new things were adopted:
+- **Entity-id scoping**: a UI dropdown locks the conversation to one `entity_id` after the first
+  message, threaded through the classification/SQL-generation prompts so pronouns like
+  "its"/"this account" resolve without re-asking, plus a defense-in-depth filter that drops any
+  result row tagged with a different entity_id after execution - serves the must-have "multi-turn
+  conversation... without repeating context" requirement directly. Found and fixed a real bug
+  while integrating: the verified-query cache key didn't include entity_id, so a query cached
+  under one entity (with that entity_id baked into the WHERE clause as a literal) could get
+  replayed for a different entity or none - the defense-in-depth filter would then silently drop
+  every row. Cache key now includes entity_id as a discriminator, mirroring the dataset-discriminator
+  fix in §6.
+- **Bank-code mapping table + aggregate-correctness rules**: a real, common small-model failure
+  the earlier rounds hadn't covered - the model would invent `bank_code='SBI'` when the real code
+  is `SBIN` (same for "Axis" -> `UTIB`). Also: wrap `SUM()`/`AVG()` in `COALESCE(..., 0)` so a
+  zero-match filter returns 0 not NULL, and "sum of accounts" means `COUNT(*)` not `SUM()` (only
+  money columns get summed). Adopted into this branch's few-shot/rule style; explicitly did NOT
+  adopt the accompanying `CAST(... AS DECIMAL)` guidance from the same commits - that's specific
+  to `origin/main`'s `ALL_VARCHAR` data layer, which this branch fixed differently (and more
+  robustly) with real typed columns in round 1. Verified live: "sum of accounts for SBI" now
+  resolves to `bank_code = 'SBIN'` correctly.
+- **Token-limit headroom**: measured the deployed model's actual context budget - the
+  SQL-generation prompt alone (system prompt + bank mapping + few-shot examples) already runs
+  ~2300 of the model's 4096-token window. Reduced `max_tokens` from 1024 to 400
+  (classification) / 512 (SQL generation, self-consistency, repair) to leave real margin, plus
+  logging the LLM endpoint's actual error body on a non-2xx response instead of just the status
+  code, for diagnosability.
 
 ## 7. Progress tracker
 
@@ -433,10 +465,20 @@ aspirational state (Redis-backed sessions, Bedrock-only, "production-ready").
 - [x] Measured: decryption itself costs ~2.7-4.7 μs/row (~0.3ms at the 100K-row hard cap) -
       not the latency bottleneck by roughly three orders of magnitude versus the LLM calls
 - [x] Self-check test: `backend/test_crypto_utils.py`
+- [x] MySQL ingestion for the 20M-row hackathon test (`FinanceDB._load_data_from_mysql`),
+      verified end-to-end against a real local MySQL 8.0 container - fixes a real hang bug found
+      in `origin/main`'s version (queried the `transaction` table before it existed, mid-loop)
+- [x] Session delete (`DELETE /sessions/{id}`) + full-payload turn persistence, ported from
+      `origin/main` - fixes a real gap where a page reload lost confidence/grounding/results
+- [x] Fixed `frontend/lib/types.ts` never existing in git on either branch (`.gitignore`'s `lib/`
+      pattern) and an invalid `tsconfig.json` option - the frontend could not build from a fresh
+      clone on either branch until this merge
+- [x] Entity-id scoping (UI dropdown, locked after first message) + bank-code mapping/aggregate
+      correctness rules + token-limit headroom, adopted from 4 more `origin/main` commits that
+      landed mid-merge - see §6.5 for the bugs found and fixed while integrating each
+- [x] `SAMPLE_QUESTIONS.md`, corrected to match the real schema and the always-decrypted behavior
 
 **Pending**
-- [ ] MySQL adapter for the 20M-row hackathon database (blocked on credentials/schema access) —
-      carry the query-cost guard over, see §6
 - [ ] Anomaly-detection bonus feature is implemented but not re-verified against the new typed
       schema in this change set
 - [ ] `complex_005`'s question/reference-SQL ambiguity (duplicate ref-ID *or* UTR) is
