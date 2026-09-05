@@ -10,7 +10,23 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [entities, setEntities] = useState<string[]>([]);
+  const [entityId, setEntityId] = useState<string>('');
   const didInitRef = useRef(false);
+
+  useEffect(() => {
+    const loadEntities = async () => {
+      try {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/entities`);
+        if (response.ok) {
+          setEntities(await response.json());
+        }
+      } catch (error) {
+        console.error('Failed to list entities:', error);
+      }
+    };
+    loadEntities();
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -132,6 +148,7 @@ export default function Home() {
           session_id: sessionId,
           message: userMessage,
           model: 'qwen-1.5b', // HuggingFace Qwen 1.5B
+          entity_id: entityId || null,
         }),
       });
 
@@ -183,6 +200,9 @@ export default function Home() {
             onSendMessage={handleSendMessage}
             loading={loading}
             sessionId={sessionId}
+            entities={entities}
+            entityId={entityId}
+            onEntityChange={setEntityId}
           />
         </div>
       </div>

@@ -4,6 +4,7 @@ Query execution, anomaly detection, data processing
 """
 
 import logging
+import os
 import re
 from typing import List, Dict, Any, Tuple
 from datetime import datetime
@@ -27,12 +28,18 @@ class QueryExecutor:
         Only decrypts columns present in results to avoid wasted CPU on absent fields.
         - account_number: Fernet (symmetric) decryption
         - utr_number: AES256-CBC decryption
-        
-        This approach: fetch encrypted data fast, decrypt only returned rows/columns.
+
+        Only auto-decrypts when no ENCRYPTION_KEY is configured (runtime env or .env) -
+        i.e. there's no real key to gate access with, so masking would be pointless.
+        When a key IS configured, results stay masked/encrypted and must go through
+        the explicit /decrypt endpoint with a valid decryption code.
         """
         if not results:
             return results
-        
+
+        if os.getenv("ENCRYPTION_KEY"):
+            return results
+
         decrypted_results = []
         for row in results:
             decrypted_row = row.copy()

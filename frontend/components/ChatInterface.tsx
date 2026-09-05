@@ -9,6 +9,9 @@ interface ChatInterfaceProps {
   onSendMessage: (message: string) => void;
   loading: boolean;
   sessionId: string | null;
+  entities?: string[];
+  entityId?: string;
+  onEntityChange?: (entityId: string) => void;
 }
 
 type TabId = 'chat' | 'results' | 'steps';
@@ -18,6 +21,9 @@ export default function ChatInterface({
   onSendMessage,
   loading,
   sessionId,
+  entities = [],
+  entityId = '',
+  onEntityChange,
 }: ChatInterfaceProps) {
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -282,6 +288,25 @@ export default function ChatInterface({
 
       <form onSubmit={handleSubmit} className={styles.inputForm}>
         <div className={styles.inputBarWrapper} ref={containerRef}>
+          {entities.length > 0 && (
+            <div className={styles.entityFilterBar}>
+              <label htmlFor="entity-filter">Entity ID:</label>
+              <select
+                id="entity-filter"
+                value={entityId}
+                onChange={(e) => onEntityChange?.(e.target.value)}
+                disabled={loading}
+                className={styles.entitySelect}
+              >
+                <option value="">All entities</option>
+                {entities.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {showDropdown && suggestions.length > 0 && (
             <ul className={styles.suggestionDropdown}>
               <li className={styles.suggestionHeader}>

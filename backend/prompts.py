@@ -290,29 +290,6 @@ Your question: "{question}"
 Please provide the missing details, then I can give you an accurate answer."""
 
 # ============================================================================
-# RESPONSE FORMATTING PROMPT
-# ============================================================================
-RESPONSE_FORMATTING_PROMPT = """You are formatting a financial analysis response.
-
-Question: {question}
-Query Results: {results}
-Confidence Score: {confidence_score}
-
-Guidelines:
-1. Start with a clear, concise answer (1-2 sentences)
-2. Include key numbers from results
-3. Mention the confidence level if < 0.8
-4. If anomalies detected, flag them with explanation
-5. End with data summary (how many records, date range, etc.)
-
-Format:
-**Answer**: [Main answer]
-**Details**: [Key findings]
-**Confidence**: [High/Medium/Low - explain if low]
-**Data Summary**: [Records analyzed, date range, filters applied]
-{anomalies_section}"""
-
-# ============================================================================
 # VALIDATION PROMPT (Validate SQL correctness)
 # ============================================================================
 SQL_VALIDATION_PROMPT = """Review this SQL query for correctness:
@@ -359,8 +336,8 @@ CONFIDENCE_COMPONENTS = {
     "result_reliability": "How confident we are in the results"
 }
 
-def build_few_shot_prompt(user_question: str, history_context: str = "") -> str:
-    """Build few-shot prompt with examples, optionally grounded in prior turns"""
+def build_few_shot_prompt(user_question: str, history_context: str = "", entity_id: str = None) -> str:
+    """Build few-shot prompt with examples, optionally grounded in prior turns and scoped to one entity_id"""
     examples_text = ""
     for i, example in enumerate(SQL_EXAMPLES, 1):
         examples_text += f"""
@@ -371,8 +348,18 @@ SQL: {example['sql']}
 ---
 """
     
-    return f"""{SQL_GENERATION_SYSTEM_PROMPT}
+    entity_instruction = ""
+    if entity_id:
+        entity_instruction = f"""
+MANDATORY FILTER: The user has selected entity_id = '{entity_id}' in the UI. The query MUST be restricted to
+this entity only. If the query touches the account table (directly or via JOIN), add
+WHERE account.entity_id = '{entity_id}' (or AND account.entity_id = '{entity_id}' if a WHERE clause already exists).
+If querying the account table directly, filter on account.entity_id = '{entity_id}'. If querying transaction,
+JOIN account ON transaction.account_id = account.account_id and filter on account.entity_id = '{entity_id}'.
+"""
 
+    return f"""{SQL_GENERATION_SYSTEM_PROMPT}
+{entity_instruction}
 {history_context}{examples_text}
 
 Now, for this question:
@@ -380,22 +367,13 @@ Now, for this question:
 
 Generate the SQL query:"""
 
-def build_cot_prompt(user_question: str, history_context: str = "") -> str:
-    """Build chain-of-thought prompt, optionally grounded in prior turns"""
-    return f"{history_context}{COT_PROMPT_TEMPLATE.format(question=user_question)}"
+def build_cot_prompt(user_question: str, history_context: str = "", entity_id: str = None) -> str:
+    """Build chain-of-thought prompt, optionally grounded in prior turns and scoped to one entity_id"""
+    prompt = f"{history_context}{COT_PROMPT_TEMPLATE.format(question=user_question)}"
+    if entity_id:
+        prompt += f"\n\nNote: Results must be restricted to entity_id = '{entity_id}' only."
+    return prompt
 
 def build_classification_prompt(user_question: str, history_context: str = "") -> str:
     """Build the query classification prompt, optionally grounded in prior conversation turns"""
     return CLASSIFICATION_PROMPT.format(question=user_question, history_context=history_context)
-
-def build_response_prompt(question: str, results: str, confidence: float, 
-                         anomalies: str = "") -> str:
-    """Build response formatting prompt"""
-    anomaly_section = f"\n**Anomalies Detected**:\n{anomalies}" if anomalies else ""
-    
-    return RESPONSE_FORMATTING_PROMPT.format(
-        question=question,
-        results=results,
-        confidence_score=confidence,
-        anomalies_section=anomaly_section
-    )

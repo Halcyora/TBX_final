@@ -7,7 +7,6 @@ import json
 import os
 import logging
 import asyncio
-import urllib.request
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -20,7 +19,7 @@ from pydantic import BaseModel
 
 from database import get_db
 from prompts import (
-    build_few_shot_prompt, build_cot_prompt, build_response_prompt,
+    build_few_shot_prompt, build_cot_prompt,
     build_classification_prompt, CLASSIFICATION_PROMPT, SQL_VALIDATION_PROMPT,
     CLARIFICATION_PROMPT_TEMPLATE
 )
@@ -134,6 +133,7 @@ class FinanceAssistantState(BaseModel):
     """State for the LangGraph"""
     user_query: str
     conversation_history: List[Dict[str, Any]] = []
+    entity_id: Optional[str] = None  # Restricts results to a single entity, if selected in the UI
     
     # Parsing stage
     intent: Optional[str] = None
@@ -275,7 +275,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
 
         # First, build CoT prompt
-        cot_prompt = build_cot_prompt(state.user_query, history_context)
+        cot_prompt = build_cot_prompt(state.user_query, history_context, entity_id=state.entity_id)
         
         # Get chain-of-thought reasoning
         cot_text = await asyncio.to_thread(
@@ -284,7 +284,7 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         logger.debug(f"Chain-of-thought: {cot_text[:200]}")
         
         # Now generate SQL with few-shot examples
-        few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
+        few_shot_prompt = build_few_shot_prompt(state.user_query, history_context, entity_id=state.entity_id)
         
         sql_text = (await asyncio.to_thread(
             call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
@@ -379,7 +379,12 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         success, result = QueryExecutor.execute(state.sql_query)
         
         if success:
-            state.query_results = result if isinstance(result, list) else [result]
+            rows = result if isinstance(result, list) else [result]
+            # Defense-in-depth: if an entity filter is active and the LLM's SQL still
+            # returned rows tagged with a different entity_id, drop them before they reach the user
+            if state.entity_id and rows and "entity_id" in rows[0]:
+                rows = [row for row in rows if row.get("entity_id") == state.entity_id]
+            state.query_results = rows
             state.processing_stages_completed.append("query_execution")
             rows = len(state.query_results)
             cols = len(state.query_results[0]) if state.query_results and len(state.query_results) > 0 else 0
