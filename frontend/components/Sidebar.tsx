@@ -7,6 +7,7 @@ interface SidebarProps {
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   onNewChat: () => void;
+  onDeleteSession: (sessionId: string) => void;
   disabled?: boolean;
 }
 
@@ -15,6 +16,7 @@ export default function Sidebar({
   activeSessionId,
   onSelectSession,
   onNewChat,
+  onDeleteSession,
   disabled,
 }: SidebarProps) {
   return (
@@ -27,20 +29,37 @@ export default function Sidebar({
           <p className={styles.empty}>No conversations yet</p>
         ) : (
           sessions.map((session) => (
-            <button
+            <div
               key={session.session_id}
-              className={`${styles.sessionItem} ${
+              className={`${styles.sessionRow} ${
                 session.session_id === activeSessionId ? styles.active : ''
               }`}
-              onClick={() => onSelectSession(session.session_id)}
-              disabled={disabled}
-              title={session.preview || 'New chat'}
             >
-              <span className={styles.sessionPreview}>
-                {session.preview || 'New chat'}
-              </span>
-              <span className={styles.sessionMeta}>{session.messages_count} msgs</span>
-            </button>
+              <button
+                className={styles.sessionItem}
+                onClick={() => onSelectSession(session.session_id)}
+                disabled={disabled}
+                title={session.preview || 'New chat'}
+              >
+                <span className={styles.sessionPreview}>
+                  {session.preview || 'New chat'}
+                </span>
+                <span className={styles.sessionMeta}>{session.messages_count} msgs</span>
+              </button>
+              <button
+                className={styles.deleteBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm('Delete this conversation? This cannot be undone.')) {
+                    onDeleteSession(session.session_id);
+                  }
+                }}
+                disabled={disabled}
+                title="Delete conversation"
+              >
+                🗑️
+              </button>
+            </div>
           ))
         )}
       </div>

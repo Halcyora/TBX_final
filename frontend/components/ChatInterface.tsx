@@ -191,10 +191,10 @@ export default function ChatInterface({
               <h2>Welcome to TBX Finance Assistant</h2>
               <p>Ask questions about your financial data. Examples:</p>
               <ul>
-                <li>What's the current balance for account 1001-2345?</li>
-                <li>Show me unreconciled transactions in Q3</li>
-                <li>Which accounts have unusual transaction patterns?</li>
-                <li>List top 10 accounts by transaction volume</li>
+                <li>What's the available balance for account 50200013729069?</li>
+                <li>Show me all accounts at HDFC BANK LIMITED</li>
+                <li>Which accounts have a negative available balance?</li>
+                <li>List all banks in the system</li>
               </ul>
             </div>
           ) : (
