@@ -29,26 +29,39 @@ SQL_GENERATION_SYSTEM_PROMPT = """Convert natural language questions into SQL qu
 DATABASE SCHEMA:
 - bank: bank_code, bank_name
 - account: account_id, account_number, available_balance, bank_code, entity_id
-- transaction (SINGULAR - NOT plural): transaction_id, account_id, transaction_date, transaction_type, transaction_amount
+- transaction (SINGULAR - NOT plural): transaction_id, account_id, transaction_date, transaction_type, description, transaction_amount, transaction_reference_id, utr_number
+  ** IMPORTANT: transaction table does NOT have bank, bank_code, or account_number columns **
+  ** transaction.description holds free-text like 'UPI-NETFLIX-...', 'NEFT - HDFC0002678 - ... - GST PAYMENT' - the ONLY place merchant/counterparty/payment-purpose names (e.g. Netflix, Amazon, GST, EMI) appear **
 
-CRITICAL RULES:
-1. Table names are ALWAYS SINGULAR: FROM transaction (NOT transactions), FROM account (NOT accounts)
-2. available_balance and transaction_amount are VARCHAR - CAST to DECIMAL before any math
-3. Use SUM() for money totals, COUNT(*) for counting rows/entities
+CRITICAL TABLE RELATIONSHIPS:
+1. transaction links to account via: transaction.account_id = account.account_id
+2. account links to bank via: account.bank_code = bank.bank_code
+3. To query transaction data with bank filter: JOIN account THEN JOIN bank
+4. To query transaction data with account filter: only JOIN account
+
+COLUMN NOTES:
+- transaction.transaction_type is ONLY 'credit' or 'debit'
+- account.available_balance and transaction.transaction_amount are VARCHAR - CAST to DECIMAL
+- account.bank_code is the FK to bank.bank_code (NOT a "bank" column)
+
+KEY RULES:
+1. Table names SINGULAR: FROM transaction (NOT transactions), FROM account (NOT accounts)
+2. Do NOT filter transaction by "bank" directly - bank info is in account table only
+3. Use SUM() for money totals, COUNT(*) for counting rows
 4. account_number is the numeric value users mention; account_id is the UUID
-5. transaction_type is ONLY 'credit' or 'debit'
-6. Date filtering: only add WHERE clause if user mentions a specific time period
-7. For date grouping: use CAST(transaction_date AS DATE)
-8. Wrap aggregates: COALESCE(SUM(CAST(x AS DECIMAL)), 0) to return 0 instead of NULL
-9. Only return SQL - no explanations, no markdown, no wrapping
+5. Only add WHERE date clause if user mentions a specific time period
+6. For date grouping: CAST(transaction_date AS DATE)
+7. Wrap aggregates: COALESCE(SUM(CAST(x AS DECIMAL)), 0) to return 0 not NULL
+8. If the user names a merchant/counterparty/payment purpose that is NOT a bank (e.g. Netflix, Amazon, GST, EMI, salary), filter with transaction.description LIKE '%KEYWORD%' (case-insensitive, uppercase the keyword)
+9. Return ONLY SQL - no explanations, no markdown, no wrapping
 
-IMPORTANT - Table Name Examples:
-- CORRECT: SELECT COUNT(*) FROM account
-- CORRECT: SELECT * FROM transaction WHERE transaction_type = 'credit'
-- WRONG: SELECT COUNT(*) FROM accounts (plural)
-- WRONG: SELECT * FROM transactions (plural)
+EXAMPLE - DON'T DO THIS (WRONG):
+- SELECT COUNT(*) FROM transaction WHERE bank IN ('HDFC', 'ICIC') - "bank" column doesn't exist!
 
-Return ONLY the SQL query - nothing else."""
+EXAMPLE - DO THIS (CORRECT):
+- SELECT COUNT(*) FROM transaction - simple count
+- SELECT COUNT(t.*) FROM transaction t JOIN account a ON t.account_id = a.account_id WHERE a.bank_code = 'HDFC' - filtered by bank
+- SELECT COUNT(*) FROM transaction WHERE description LIKE '%NETFLIX%' - filtered by merchant name in description"""
 
 # ============================================================================
 # FEW-SHOT EXAMPLES FOR SQL GENERATION (TBX Schema)
@@ -61,6 +74,10 @@ SQL_EXAMPLES = [
     {
         "question": "What is the total balance of all accounts?",
         "sql": "SELECT COALESCE(SUM(CAST(available_balance AS DECIMAL)), 0) as total_balance FROM account"
+    },
+    {
+        "question": "What is the total number of transactions?",
+        "sql": "SELECT COUNT(*) as total_transactions FROM transaction"
     },
     {
         "question": "Show transactions from HDFC bank",
@@ -77,6 +94,10 @@ LIMIT 50"""
     {
         "question": "How many credit vs debit transactions are there?",
         "sql": "SELECT transaction_type, COUNT(*) as count, COALESCE(SUM(CAST(transaction_amount AS DECIMAL)), 0) as total_amount FROM transaction GROUP BY transaction_type"
+    },
+    {
+        "question": "How many transactions are there for Netflix?",
+        "sql": "SELECT COUNT(*) as netflix_transaction_count FROM transaction WHERE description LIKE '%NETFLIX%'"
     }
 ]
 
@@ -85,11 +106,11 @@ LIMIT 50"""
 # ============================================================================
 COT_PROMPT_TEMPLATE = """Question: {question}
 
-Tables: bank (bank_code, bank_name), account (account_id, account_number, available_balance, bank_code), transaction (transaction_id, account_id, transaction_date, transaction_type, transaction_amount)
+Tables: bank (bank_code, bank_name), account (account_id, account_number, available_balance, bank_code), transaction (transaction_id, account_id, transaction_date, transaction_type, description, transaction_amount)
 
 Think step-by-step:
 1. Which tables needed? (bank, account, transaction - always use singular names)
-2. What filters? (only add date if time period mentioned)
+2. What filters? (only add date if time period mentioned; merchant/counterparty names like Netflix/Amazon/GST/EMI go in transaction.description LIKE '%NAME%')
 3. What calculation? (COUNT, SUM, AVG?)
 4. How to join?
 5. Sort and limit?
@@ -108,6 +129,19 @@ Classify:
 2. entities: Which accounts/banks/programs mentioned?
 3. filters: What conditions? (date range, bank_code, balance range, etc.)
 4. confidence: high/medium/low
+
+CONFIDENCE CALIBRATION - a question is HIGH confidence (>= 0.8) whenever it can be answered
+with a single COUNT/SUM/AVG/GROUP BY query over the whole table(s) and does NOT depend on
+something missing from the question itself. Do NOT lower confidence just because the
+question doesn't name a specific account/bank/entity - "how many", "count of", "total",
+"unique"/"distinct" questions about the whole dataset are self-contained and unambiguous.
+Only use LOW confidence (< 0.6) when the question uses a pronoun/reference with nothing to
+resolve it to (e.g. "its balance", "that account") or names an account/bank/entity that
+doesn't exist in the schema.
+Examples:
+- "count of unique banks in account records" -> confidence_score: 0.95 (self-contained: SELECT COUNT(DISTINCT bank_code) FROM account)
+- "how many accounts do we have?" -> confidence_score: 0.95 (self-contained)
+- "what's its balance?" (no entity/account selected) -> confidence_score: 0.3 (ambiguous pronoun, nothing to resolve "its" to)
 
 Respond in JSON format:
 {{
@@ -140,10 +174,11 @@ Check:
 1. Table names SINGULAR (transaction, account, bank - NOT plural)
 2. Valid SQL syntax
 3. CAST numeric columns before SUM/AVG: COALESCE(CAST(x AS DECIMAL), 0)
-4. Only bank codes: HDFC, ICIC, SBIN, UTIB, KKBK, CNRB, UBIN, AUBL, TMBL, RATN
-5. Answers the question correctly
+4. CRITICAL: Do NOT add WHERE clauses or bank filters if they are not in the query!
+5. CRITICAL: Do NOT reference bank or bank_code columns on transaction table (they don't exist in transaction table).
+6. If the query is already valid and correct, return it EXACTLY as is without changes.
 
-Fix any issues and return ONLY the corrected SQL (no explanation)."""
+Return ONLY the SQL query (no explanation, no markdown)."""
 
 # ============================================================================
 # REPAIR PROMPT (Fix a query that failed)

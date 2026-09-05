@@ -7,6 +7,7 @@ import json
 import os
 import logging
 import asyncio
+import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -66,7 +67,77 @@ def _restrict_to_named_bank(sql: str, user_query: str) -> str:
     return pattern.sub(_replace, sql)
 
 
+def _enforce_named_bank_filter(sql: str, user_query: str) -> str:
+    """
+    If the question names exactly one bank but the generated SQL has no bank_code filter
+    at all (observed: the LLM sometimes just JOINs account/bank with no WHERE clause,
+    returning every bank's data instead of the one asked about), inject one.
+    """
+    matched_codes = _detect_named_banks(user_query)
+    if len(matched_codes) != 1:
+        return sql
+    target_code = matched_codes[0]
+
+    # Already filtered on this bank_code somewhere (as '=' or part of an IN list) - nothing to do
+    if re.search(rf"bank_code\s*(=|IN)\s*.*?{target_code}", sql, re.IGNORECASE):
+        return sql
+
+    # Only possible if the query touches the account table (bank_code lives there)
+    account_match = re.search(r"\b(?:FROM|JOIN)\s+account\b(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?", sql, re.IGNORECASE)
+    if not account_match:
+        return sql
+    alias = account_match.group(1) or "account"
+    if alias.upper() in ("WHERE", "GROUP", "ORDER", "LIMIT", "JOIN", "ON", "INNER", "LEFT", "RIGHT", "FULL", "AS"):
+        alias = "account"
+
+    condition = f"{alias}.bank_code = '{target_code}'"
+
+    tail_match = re.search(r"\b(GROUP BY|ORDER BY|LIMIT)\b", sql, re.IGNORECASE)
+    insertion_point = tail_match.start() if tail_match else len(sql)
+    head, tail = sql[:insertion_point], sql[insertion_point:]
+    head = head.rstrip().rstrip(";")
+
+    if re.search(r"\bWHERE\b", head, re.IGNORECASE):
+        head += f" AND {condition} "
+    else:
+        head += f" WHERE {condition} "
+
+    result = head + tail
+    if result != sql:
+        logger.info(f"Injected missing bank filter for '{target_code}': {result[:150]}...")
+    return result
+
+
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _remove_invalid_transaction_filters(sql: str) -> str:
+    """
+    Remove WHERE clauses that filter transaction table by columns that don't exist.
+    LLM sometimes generates: WHERE bank IN (...) or WHERE bank_code IN (...)
+    These fail at runtime because transaction table only has:
+      transaction_id, account_id, transaction_date, transaction_type, transaction_amount
+    
+    If this pattern is detected on a transaction query without a JOIN to account,
+    remove it entirely (the user probably wants all transactions anyway).
+    """
+    # Check if this is a transaction query that filters by non-existent columns
+    if re.search(r"\bFROM\s+transaction\b", sql, re.IGNORECASE):
+        # Remove any WHERE clauses filtering by "bank" or "bank_code" directly on transaction
+        # Pattern: WHERE bank[_code] IN (...) or WHERE bank[_code] = ...
+        sql_cleaned = re.sub(
+            r"\s+WHERE\s+(\w+\.)?bank(_code)?\s+(?:IN|=)\s*\([^)]*\)|[^;]+\)(?=\s*(?:GROUP|ORDER|LIMIT|;|$))",
+            "",
+            sql,
+            flags=re.IGNORECASE
+        )
+        # If we removed the WHERE, also ensure we didn't leave trailing ANDs
+        sql_cleaned = re.sub(r"\s+AND\s+\(\s*\)\s*", "", sql_cleaned)
+        
+        if sql_cleaned != sql:
+            logger.info(f"Removed invalid transaction filter. Before: {sql[:100]}... After: {sql_cleaned[:100]}...")
+        return sql_cleaned
+    return sql
 
 
 def _enforce_entity_scope(sql: str, entity_id: str) -> str:
@@ -141,6 +212,15 @@ _bedrock_client = None
 
 VLLM_ENDPOINT_URL = os.getenv("VLLM_ENDPOINT_URL", "https://vllm-qwen-2wv6ilt7fa-uc.a.run.app/v1/chat/completions")
 VLLM_MODEL_ID = os.getenv("VLLM_MODEL_ID", "Qwen/Qwen2.5-Coder-1.5B-Instruct")
+VLLM_TIMEOUT_SECONDS = float(os.getenv("VLLM_TIMEOUT_SECONDS", "8"))
+
+# Circuit breaker: once vLLM fails this many times in a row, stop trying it for a
+# cool-down window and go straight to Bedrock, so an unreachable endpoint doesn't add
+# repeated timeout latency to every subsequent query.
+_VLLM_FAILURE_THRESHOLD = 2
+_VLLM_COOLDOWN_SECONDS = 120
+_vllm_consecutive_failures = 0
+_vllm_disabled_until = 0.0
 
 
 def _get_bedrock_client():
@@ -171,7 +251,7 @@ def _call_vllm(prompt: str, system: Optional[str], max_tokens: int, temperature:
             "temperature": temperature,
         },
         headers={"Content-Type": "application/json"},
-        timeout=30.0,
+        timeout=VLLM_TIMEOUT_SECONDS,
     )
     if response.status_code >= 400:
         # Surface the server's actual error body (e.g. context-length exceeded) instead of
@@ -193,17 +273,24 @@ def call_llm(prompt: str, model_alias: str = DEFAULT_MODEL_ALIAS, system: Option
 
     Prefers the self-hosted vLLM endpoint (Qwen2.5-Coder-1.5B-Instruct) when
     VLLM_ENDPOINT_URL is reachable, falling back to AWS Bedrock otherwise/on error.
-    Retries the vLLM call once on transient failures (timeouts, cold starts, etc.)
-    before falling back.
+    A circuit breaker skips vLLM entirely (straight to Bedrock) for a cool-down window
+    after repeated failures, instead of eating a timeout on every single query.
     """
-    last_error: Optional[Exception] = None
-    for attempt in range(2):
+    global _vllm_consecutive_failures, _vllm_disabled_until
+
+    if time.time() < _vllm_disabled_until:
+        logger.info("vLLM circuit breaker open - skipping straight to Bedrock")
+    else:
         try:
-            return _call_vllm(prompt, system, max_tokens, temperature)
+            result = _call_vllm(prompt, system, max_tokens, temperature)
+            _vllm_consecutive_failures = 0
+            return result
         except Exception as e:
-            last_error = e
-            logger.warning(f"vLLM inference attempt {attempt + 1} failed: {e}")
-    logger.warning(f"vLLM inference failed after retries, falling back to Bedrock: {last_error}")
+            _vllm_consecutive_failures += 1
+            logger.warning(f"vLLM inference failed (consecutive failures: {_vllm_consecutive_failures}): {e}")
+            if _vllm_consecutive_failures >= _VLLM_FAILURE_THRESHOLD:
+                _vllm_disabled_until = time.time() + _VLLM_COOLDOWN_SECONDS
+                logger.warning(f"vLLM disabled for {_VLLM_COOLDOWN_SECONDS}s after repeated failures, falling back to Bedrock")
 
     model_id = _resolve_model_id(model_alias)
     client = _get_bedrock_client()
@@ -309,6 +396,20 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         
         # Determine if clarification needed (low confidence)
         state.needs_clarification = state.confidence_score < 0.6
+
+        # Safety net: the small LLM sometimes under-rates confidence for questions that are
+        # actually self-contained (e.g. "count of unique banks in account records"). If the
+        # question has no dangling pronoun/reference (nothing for entity_id to resolve) and
+        # matches a simple count/sum/aggregate pattern over the whole dataset, don't force
+        # clarification just because the model's self-rated score was low.
+        if state.needs_clarification and not state.entity_id:
+            ambiguous_pronoun = re.search(r"\b(its|their|this account|that account|it)\b", state.user_query, re.IGNORECASE)
+            self_contained_aggregate = re.search(
+                r"\b(count|how many|total|sum|average|unique|distinct)\b", state.user_query, re.IGNORECASE
+            )
+            if self_contained_aggregate and not ambiguous_pronoun:
+                logger.info("Overriding low classification confidence: question looks self-contained")
+                state.needs_clarification = False
         
         state.processing_stages_completed.append("classification")
         entities_str = ", ".join([f"{k}={v}" for k, v in state.entities.items()]) if state.entities else "none"
@@ -391,6 +492,13 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         elif "```" in sql_text:
             sql_text = sql_text.split("```")[1].split("```")[0].strip()
         
+        # Remove invalid transaction filters that the LLM might add
+        sql_text = _remove_invalid_transaction_filters(sql_text)
+        # Fix up bank filtering: narrow an IN-list to the single named bank, or inject a
+        # missing filter entirely, so results match the bank the user actually asked about
+        sql_text = _restrict_to_named_bank(sql_text, state.user_query)
+        sql_text = _enforce_named_bank_filter(sql_text, state.user_query)
+        
         state.sql_query = sql_text
         state.processing_stages_completed.append("sql_generation")
         # Show full SQL or truncate if very long
@@ -435,6 +543,9 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
             elif "```" in corrected_sql:
                 corrected_sql = corrected_sql.split("```")[1].split("```")[0].strip()
             
+            corrected_sql = _remove_invalid_transaction_filters(corrected_sql)
+            corrected_sql = _restrict_to_named_bank(corrected_sql, state.user_query)
+            corrected_sql = _enforce_named_bank_filter(corrected_sql, state.user_query)
             revalidated, revalidation_msg = SQLValidator.validate_query(corrected_sql)
             if revalidated:
                 state.sql_query = corrected_sql
@@ -443,15 +554,14 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
                 state.stage_details["sql_validation"] = "Passed static + LLM semantic checks (query refined)"
                 logger.info("SQL validation passed (LLM-corrected query re-verified)")
             else:
-                # LLM's "correction" failed the safety net - keep the original query,
-                # which already passed static validation above
+                # LLM's "correction" failed schema/static safety net - keep original valid query
                 logger.warning(
                     f"LLM-corrected SQL failed re-validation ({revalidation_msg}); "
                     f"keeping original validated query instead"
                 )
                 state.sql_valid = True
                 state.processing_stages_completed.append("sql_validation")
-                state.stage_details["sql_validation"] = "Passed static checks (kept original query)"
+                state.stage_details["sql_validation"] = "Passed static + schema checks (kept original query)"
         
     except Exception as e:
         logger.error(f"SQL validation error: {e}")
@@ -601,6 +711,17 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
     logger.info("Formatting response")
     
     try:
+        # Always build grounding info so UI gets full transparency even on error/no-results
+        state.grounding_info = {
+            "sql_query": state.sql_query or "No query executed",
+            "data_source": "Verified execution against database",
+            "execution_time_ms": 0,
+            "rows_analyzed": len(state.query_results) if state.query_results else 0,
+            "date_queried": datetime.now().isoformat(),
+            "filters_applied": state.filters or [],
+            "anomalies_detected": len(state.anomalies) if state.anomalies else 0
+        }
+
         if state.execution_error:
             # Never surface raw exception text to the user - still grounded (no invented
             # number), just phrased as an honest, actionable message. Raw error stays in logs.

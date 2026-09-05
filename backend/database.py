@@ -1,40 +1,95 @@
 """
-DuckDB Database Management
+Database Management
 Handles financial data loading and query execution
 Schema: bank, account, transaction (TBX Finance Assistant)
 """
 
 import os
+import re
+import time
 import duckdb
+import pymysql
 from pathlib import Path
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Tuple
 import logging
-from encryption import AccountEncryption
 
 logger = logging.getLogger(__name__)
 
-class FinanceDB:
-    """DuckDB wrapper for TBX financial data queries.
+# Safety cap for queries with no explicit LIMIT, so a query like "SELECT * FROM transaction"
+# can't pull the entire (10M+ row) transaction table into memory/over the wire.
+DEFAULT_ROW_CAP = 10000
 
-    Data source is either local CSVs (default, for dev/small/large datasets) or a live
-    MySQL instance if MYSQL_HOST/MYSQL_USER/MYSQL_DATABASE env vars are set - useful for
-    final verification against a judge-provided database with the same bank/account/
-    transaction schema. DuckDB's mysql extension attaches the remote DB and we expose it
-    through views named bank/account/transaction, so SQL generation/validation code
-    (which only knows about those three unqualified table names) needs no changes.
+# How long to cache query results in memory. Aggregate queries (COUNT/SUM) against a live
+# remote MySQL table with 10M+ rows require a full table scan on the server and can take
+# 30+ seconds; caching avoids repeating that scan for the same/repeated question within
+# this window. Set to 0 to disable caching.
+QUERY_CACHE_TTL_SECONDS = float(os.getenv("QUERY_CACHE_TTL_SECONDS", "60"))
+
+
+class MySQLConnectionAdapter:
+    """Wraps a pymysql connection with the same chainable execute(...).fetchall()/.description
+    interface DuckDB's connection exposes, so the rest of the app (sql_validator, tools, main)
+    needs no changes whether it's talking to local DuckDB or live MySQL. Queries run directly
+    against MySQL - no local copy and none of DuckDB's mysql-extension aggregate bugs."""
+
+    def __init__(self, cfg: Dict[str, str]):
+        self._connection = pymysql.connect(
+            host=cfg["host"],
+            port=int(cfg["port"]),
+            user=cfg["user"],
+            password=cfg["password"],
+            database=cfg["database"],
+            autocommit=True,
+        )
+        self._cursor = None
+
+    def execute(self, sql: str, params=None):
+        self._cursor = self._connection.cursor()
+        self._cursor.execute(sql.replace("?", "%s"), params)
+        return self
+
+    def executemany(self, sql: str, seq_of_params):
+        self._cursor = self._connection.cursor()
+        self._cursor.executemany(sql.replace("?", "%s"), seq_of_params)
+        return self
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    @property
+    def description(self):
+        return self._cursor.description if self._cursor else None
+
+    def close(self):
+        self._connection.close()
+
+
+class FinanceDB:
+    """Wrapper for TBX financial data queries.
+
+    Data source is either local CSVs loaded into DuckDB (default, for dev/small/large
+    datasets) or a live MySQL instance if MYSQL_HOST/MYSQL_USER/MYSQL_DATABASE env vars are
+    set - useful for final verification against a judge-provided database with the same
+    bank/account/transaction schema. When MySQL is configured we connect to it directly via
+    pymysql (see MySQLConnectionAdapter) and query it live - no local copy/materialization
+    step, so startup is instant and there's no dependency on DuckDB's mysql extension.
     """
     
     def __init__(self, db_path: str = "./data/finance.db", dataset: str = "small"):
         """
         Initialize database connection
         Args:
-            db_path: Path to DuckDB database file
+            db_path: Path to DuckDB database file (only used when MySQL isn't configured)
             dataset: 'small' (10 records) or 'large' (500k+ records), ignored if MySQL is configured
         """
         self.db_path = db_path
         self.dataset = dataset
         self.conn = None
         self.mysql_config = self._read_mysql_config()
+        self._query_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
         self.initialize()
 
     @staticmethod
@@ -54,59 +109,32 @@ class FinanceDB:
         }
     
     def initialize(self):
-        """Initialize DuckDB connection and load data (from MySQL if configured, else CSV)"""
+        """Connect to the configured data source: live MySQL (direct, via pymysql) if
+        configured, else DuckDB loaded from local CSVs."""
         try:
-            self.conn = duckdb.connect(self.db_path, read_only=False)
-            logger.info(f"Connected to DuckDB: {self.db_path}")
             if self.mysql_config:
-                self._load_data_from_mysql()
+                self._connect_live_mysql()
             else:
+                self.conn = duckdb.connect(self.db_path, read_only=False)
+                logger.info(f"Connected to DuckDB: {self.db_path}")
                 self._load_data_from_csv()
             logger.info("Data loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize DuckDB: {e}")
+            logger.error(f"Failed to initialize database: {e}")
             raise
 
-    def _load_data_from_mysql(self):
-        """Attach a live MySQL database via DuckDB's mysql extension and copy its
-        bank/account/transaction tables into local DuckDB tables of the same name, for final
-        verification against a real judge-provided database instead of the bundled CSV
-        datasets. We materialize a snapshot (same pattern as CSV loading) rather than
-        exposing live views, since aggregate queries against live mysql-scanner views hit a
-        known DuckDB internal error (count_star() binding failure) with this extension."""
+    def _connect_live_mysql(self):
+        """Connect directly to MySQL via pymysql and query it live - bank/account/transaction
+        are queried straight from MySQL with no local copy, so this is instant regardless of
+        table size and unaffected by DuckDB's mysql-extension aggregate bug. Startup only does
+        a cheap existence check per table (not a COUNT(*)), so a 10M+ row transaction table
+        doesn't add scan latency to app startup - actual counts are fetched on demand per query."""
         cfg = self.mysql_config
-        logger.info(f"Connecting to MySQL at {cfg['host']}:{cfg['port']}/{cfg['database']} for final verification")
-
-        try:
-            self.conn.execute("INSTALL mysql")
-            self.conn.execute("LOAD mysql")
-
-            conn_parts = [f"host={cfg['host']}", f"port={cfg['port']}", f"user={cfg['user']}", f"db={cfg['database']}"]
-            if cfg["password"]:
-                conn_parts.insert(3, f"passwd={cfg['password']}")
-            conn_string = " ".join(conn_parts)
-            self.conn.execute(f"ATTACH '{conn_string}' AS mysqldb (TYPE mysql)")
-
-            for table_name in ("bank", "account", "transaction"):
-                for drop_stmt in (f"DROP VIEW IF EXISTS {table_name}", f"DROP TABLE IF EXISTS {table_name}"):
-                    try:
-                        self.conn.execute(drop_stmt)
-                    except Exception:
-                        pass  # object doesn't exist or is the other kind - safe to ignore
-                self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM mysqldb.{table_name}")
-                row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                logger.info(f"  ✓ Loaded {table_name} from MySQL: {row_count:,} rows")
-                
-                # Encrypt account numbers after loading from MySQL
-                if table_name == "account":
-                    self._encrypt_account_numbers()
-
-            self.conn.execute("DETACH mysqldb")
-            self._create_indexes()
-
-        except Exception as e:
-            logger.error(f"Failed to attach MySQL database: {e}")
-            raise
+        logger.info(f"Connecting directly to MySQL at {cfg['host']}:{cfg['port']}/{cfg['database']}")
+        self.conn = MySQLConnectionAdapter(cfg)
+        for table_name in ("bank", "account", "transaction"):
+            self.conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1").fetchone()
+            logger.info(f"  ✓ Connected to {table_name} in MySQL (queried live, no local copy)")
     
     def _load_data_from_csv(self):
         """Load CSV files into DuckDB tables from selected dataset"""
@@ -137,10 +165,6 @@ class FinanceDB:
                         SELECT * FROM read_csv_auto('{csv_path}', ALL_VARCHAR=TRUE)
                     """)
                     
-                    # Encrypt account numbers if this is the account table
-                    if table_name == "account":
-                        self._encrypt_account_numbers()
-                    
                     # Get row count
                     row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
                     logger.info(f"  ✓ Loaded {table_name}: {row_count:,} rows")
@@ -154,38 +178,6 @@ class FinanceDB:
         
         # Create useful indexes for faster queries
         self._create_indexes()
-    
-    def _encrypt_account_numbers(self):
-        """Encrypt account numbers (Fernet) in the account table. UTR numbers arrive
-        already encrypted/mixed from the dataset and are left untouched here."""
-        try:
-            # Encrypt account numbers in account table
-            try:
-                self.conn.execute("ALTER TABLE account ADD COLUMN account_number_masked VARCHAR(20)")
-            except:
-                pass  # Column already exists
-            
-            # Get all account numbers from account table
-            account_rows = self.conn.execute("SELECT account_id, account_number FROM account").fetchall()
-            
-            # Encrypt each account number (Fernet encryption), skipping values already encrypted
-            encrypted_count = 0
-            for account_id, account_number in account_rows:
-                if account_number.startswith("gAAAAA"):
-                    continue  # already Fernet-encrypted at the source
-                encrypted = AccountEncryption.encrypt_account_number(account_number)
-                masked_display = AccountEncryption.mask_account_number(account_number)
-                self.conn.execute(
-                    "UPDATE account SET account_number = ?, account_number_masked = ? WHERE account_id = ?",
-                    (encrypted, masked_display, account_id)
-                )
-                encrypted_count += 1
-            
-            logger.info(f"  ✓ Encrypted {encrypted_count} account numbers in the database")
-        
-        except Exception as e:
-            logger.error(f"Failed to encrypt sensitive data: {e}")
-            raise
     
     def _create_indexes(self):
         """Create indexes on commonly queried columns"""
@@ -201,15 +193,38 @@ class FinanceDB:
         except Exception as e:
             logger.warning(f"Index creation warning: {e}")
     
+    @staticmethod
+    def _apply_row_cap(sql: str, cap: int = DEFAULT_ROW_CAP) -> str:
+        """Wrap queries that have no top-level LIMIT clause in a capped subquery, so a
+        query against the transaction table can't return millions of rows into memory."""
+        stripped = sql.strip().rstrip(";")
+        if re.search(r'\bLIMIT\s+\d+', stripped, re.IGNORECASE):
+            return stripped
+        return f"SELECT * FROM ({stripped}) AS _capped_result LIMIT {cap}"
+
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute SQL query and return results as list of dicts"""
+        """Execute SQL query and return results as list of dicts. Cached briefly (see
+        QUERY_CACHE_TTL_SECONDS) since repeated aggregate queries against the live 10M+ row
+        transaction table are expensive full-table scans on the remote MySQL server."""
+        capped_sql = self._apply_row_cap(sql)
+
+        if QUERY_CACHE_TTL_SECONDS > 0:
+            cached = self._query_cache.get(capped_sql)
+            if cached and (time.time() - cached[0]) < QUERY_CACHE_TTL_SECONDS:
+                logger.debug("Query cache hit")
+                return cached[1]
+
         try:
-            result = self.conn.execute(sql).fetchall()
+            result = self.conn.execute(capped_sql).fetchall()
             columns = [desc[0] for desc in self.conn.description] if self.conn.description else []
             
             # Convert to list of dicts
             data = [dict(zip(columns, row)) for row in result]
             logger.debug(f"Query executed successfully, returned {len(data)} rows")
+
+            if QUERY_CACHE_TTL_SECONDS > 0:
+                self._query_cache[capped_sql] = (time.time(), data)
+
             return data
         except Exception as e:
             logger.error(f"Query execution failed: {e}\nSQL: {sql}")

@@ -57,6 +57,13 @@ class SQLValidator:
         if not valid_cols:
             return False, f"Column validation warning: {col_msg}"
         
+        # 5. Database EXPLAIN dry-run check (verifies real column names and schema)
+        try:
+            db = get_db()
+            db.conn.execute(f"EXPLAIN {sql}")
+        except Exception as e:
+            return False, f"Schema validation failed: {str(e)}"
+        
         logger.info("SQL query passed all validation checks")
         return True, "Query is valid"
     
