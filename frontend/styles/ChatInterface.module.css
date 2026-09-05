@@ -269,6 +269,18 @@
   color: #333;
 }
 
+.entitySelect:disabled {
+  background: #f3f3f5;
+  color: #999;
+  cursor: not-allowed;
+}
+
+.entityLockedNote {
+  font-size: 0.75rem;
+  color: #999;
+  white-space: nowrap;
+}
+
 .inputBar {
   max-width: 768px;
   margin: 0 auto;

@@ -295,7 +295,8 @@ export default function ChatInterface({
                 id="entity-filter"
                 value={entityId}
                 onChange={(e) => onEntityChange?.(e.target.value)}
-                disabled={loading}
+                disabled={loading || messages.length > 0}
+                title={messages.length > 0 ? 'Entity filter is locked once a conversation has started' : undefined}
                 className={styles.entitySelect}
               >
                 <option value="">All entities</option>
@@ -305,6 +306,7 @@ export default function ChatInterface({
                   </option>
                 ))}
               </select>
+              {messages.length > 0 && <span className={styles.entityLockedNote}>🔒 locked for this session</span>}
             </div>
           )}
           {showDropdown && suggestions.length > 0 && (
