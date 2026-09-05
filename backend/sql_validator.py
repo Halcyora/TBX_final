@@ -15,10 +15,11 @@ logger = logging.getLogger(__name__)
 class SQLValidator:
     """Validates SQL queries for safety and correctness"""
     
-    # Allowed tables in the financial database
+    # Allowed tables in the TBX financial database
     ALLOWED_TABLES = {
-        'transactions', 'vendor_payouts', 'reconciliation_status',
-        'chart_of_accounts', 'vendor_list'
+        'bank',       # bank_code, bank_name
+        'account',    # account_id, entity_id, account_number, program_id, available_balance, bank_code
+        'transaction' # transaction_id, account_id, transaction_date, transaction_type, description, transaction_amount, transaction_reference_id, utr_number
     }
     
     # Dangerous SQL keywords to prevent

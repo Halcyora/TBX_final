@@ -124,6 +124,13 @@
   border-top: 1px solid #e5e5e5;
   background: #ffffff;
   padding: 1rem 1.5rem 1.5rem;
+  position: relative;
+}
+
+.inputBarWrapper {
+  max-width: 768px;
+  margin: 0 auto;
+  position: relative;
 }
 
 .inputBar {
@@ -137,6 +144,29 @@
   border-radius: 999px;
   padding: 0.4rem 0.4rem 0.4rem 1.1rem;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  position: relative;
+  z-index: 2;
+}
+
+.inputWrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.ghostText {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: #9ab0c7;
+  white-space: pre;
+  overflow: hidden;
+  max-width: 100%;
 }
 
 .input {
@@ -147,6 +177,8 @@
   font-size: 0.95rem;
   font-family: inherit;
   background: transparent;
+  position: relative;
+  z-index: 1;
 }
 
 .input:disabled {
@@ -168,6 +200,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 2;
 }
 
 .sendButton:hover:not(:disabled) {
@@ -177,4 +210,88 @@
 .sendButton:disabled {
   background: #d9d9e3;
   cursor: not-allowed;
+}
+
+.suggestionDropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  list-style: none;
+  padding: 0.4rem;
+  margin: 0;
+  z-index: 20;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.suggestionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 0.25rem;
+}
+
+.modelBadge {
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.suggestionItem {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+  color: #1e293b;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.suggestionItem:hover,
+.suggestionItem.active {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+.suggestionIcon {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.tabHint {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

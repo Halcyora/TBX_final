@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import asyncio
+import boto3
 
 from langgraph_flow import build_finance_graph, FinanceAssistantState
 from tools import ContextManager, DataExporter
@@ -39,6 +40,7 @@ FASTAPI_HOST = os.getenv("FASTAPI_HOST", "localhost")
 FASTAPI_PORT = int(os.getenv("FASTAPI_PORT", 8000))
 SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_MINUTES", 60))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.60))
+SESSION_STORE_PATH = os.getenv("SESSION_STORE_PATH", "./data/sessions_store.json")
 
 # ============================================================================
 # MODELS
@@ -61,6 +63,8 @@ class ChatResponse(BaseModel):
     grounding_info: Dict[str, Any]
     anomalies_detected: List[Dict[str, Any]]
     query_results: List[Dict[str, Any]]
+    processing_stages: List[str]
+    stage_details: Dict[str, str]
     export_available: bool
     export_filename: Optional[str] = None
 
@@ -74,18 +78,50 @@ class ExportRequest(BaseModel):
     session_id: str
     format: str = "csv"
 
+class AutocompleteRequest(BaseModel):
+    query: str
+
+class AutocompleteResponse(BaseModel):
+    suggestions: List[str]
+
 # ============================================================================
 # IN-MEMORY SESSION MANAGER (Redis removed for local/dev use; see PRODUCTION.md)
 # ============================================================================
 
 class SessionManager:
-    """Manage sessions in-process. Conversation is stored as paired Q&A turns
-    (not a flat message log) so context summarization has meaningful content to work with.
-    Sessions are lost on process restart — use the Redis-backed version in production."""
+    """Manage sessions in-process, persisted to a JSON file on disk so sessions survive
+    both page refreshes and backend restarts (no Redis/Docker needed for local dev).
+    Conversation is stored as paired Q&A turns (not a flat message log) so context
+    summarization has meaningful content to work with."""
     
     def __init__(self):
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.timeout = SESSION_TIMEOUT * 60  # Convert to seconds
+        self._load()
+    
+    def _load(self):
+        """Load persisted sessions from disk, dropping any that have already expired"""
+        if not os.path.exists(SESSION_STORE_PATH):
+            return
+        try:
+            with open(SESSION_STORE_PATH, "r") as f:
+                data = json.load(f)
+            now = datetime.now().timestamp()
+            self._sessions = {
+                sid: s for sid, s in data.items() if s.get("_expires_at", 0) > now
+            }
+            logger.info(f"Loaded {len(self._sessions)} session(s) from {SESSION_STORE_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to load session store: {e}")
+    
+    def _persist(self):
+        """Write all sessions to disk. Simple full-file rewrite - fine at local/dev scale."""
+        try:
+            os.makedirs(os.path.dirname(SESSION_STORE_PATH) or ".", exist_ok=True)
+            with open(SESSION_STORE_PATH, "w") as f:
+                json.dump(self._sessions, f)
+        except Exception as e:
+            logger.error(f"Failed to persist session store: {e}")
     
     def create_session(self) -> str:
         """Create new session"""
@@ -97,6 +133,7 @@ class SessionManager:
             "last_message_at": now.isoformat(),
             "_expires_at": now.timestamp() + self.timeout
         }
+        self._persist()
         
         logger.info(f"Session created: {session_id}")
         return session_id
@@ -114,7 +151,8 @@ class SessionManager:
         return session
     
     def add_turn(self, session_id: str, question: str, answer: str,
-                export_filename: Optional[str] = None):
+                export_filename: Optional[str] = None, processing_stages: Optional[List[str]] = None,
+                stage_details: Optional[Dict[str, str]] = None):
         """Store one Q&A turn (question+answer together) rather than two separate messages"""
         session = self.get_session(session_id)
         if not session:
@@ -124,12 +162,15 @@ class SessionManager:
             "question": question,
             "answer": answer,
             "export_filename": export_filename,
+            "processing_stages": processing_stages or [],
+            "stage_details": stage_details or {},
             "timestamp": datetime.now().isoformat()
         })
         
         now = datetime.now()
         session["last_message_at"] = now.isoformat()
         session["_expires_at"] = now.timestamp() + self.timeout
+        self._persist()
     
     def get_context(self, session_id: str, max_turns: int = 3) -> List[Dict]:
         """Get compressed conversation context (last N full turns + summaries of older ones)"""
@@ -156,6 +197,8 @@ class SessionManager:
         expired = [sid for sid, s in self._sessions.items() if now > s["_expires_at"]]
         for sid in expired:
             del self._sessions[sid]
+        if expired:
+            self._persist()
         
         summaries = []
         for session_id, session in self._sessions.items():
@@ -286,7 +329,12 @@ async def get_session_messages(session_id: str):
         chat_messages = []
         for turn in session["messages"]:
             chat_messages.append({"role": "user", "content": turn["question"]})
-            chat_messages.append({"role": "assistant", "content": turn["answer"]})
+            chat_messages.append({
+                "role": "assistant",
+                "content": turn["answer"],
+                "processing_stages": turn.get("processing_stages", []),
+                "stage_details": turn.get("stage_details", {})
+            })
         
         return chat_messages
     
@@ -347,6 +395,8 @@ async def chat(request: ChatRequest):
             request.message.content,
             response_state.final_answer,
             response_state.export_filename,
+            response_state.processing_stages_completed,
+            response_state.stage_details,
         )
         
         # Confidence: use the composite value already computed in response_formatting_node
@@ -367,6 +417,8 @@ async def chat(request: ChatRequest):
             grounding_info=response_state.grounding_info,
             anomalies_detected=response_state.anomalies,
             query_results=response_state.query_results,
+            processing_stages=response_state.processing_stages_completed,
+            stage_details=response_state.stage_details,
             export_available=len(response_state.query_results) > 0,
             export_filename=response_state.export_filename
         )
@@ -403,6 +455,132 @@ async def export_data(request: ExportRequest):
     except Exception as e:
         logger.error(f"Export error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+_bedrock_autocomplete_client = None
+
+def get_bedrock_autocomplete_client():
+    global _bedrock_autocomplete_client
+    if _bedrock_autocomplete_client is None:
+        _bedrock_autocomplete_client = boto3.client(
+            "bedrock-runtime",
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        )
+    return _bedrock_autocomplete_client
+
+
+def get_dataset_autocomplete_context(user_query: str) -> Dict[str, List[str]]:
+    """Fetch matching entity context from DuckDB tables for autocomplete grounding."""
+    vendors = []
+    accounts = []
+    clean_q = user_query.strip().lower()
+    
+    try:
+        db = get_db()
+        # Find matching vendor names
+        if clean_q:
+            v_rows = db.conn.execute(
+                "SELECT DISTINCT vendor_name FROM vendor_list WHERE LOWER(vendor_name) LIKE ? LIMIT 5",
+                [f"%{clean_q}%"]
+            ).fetchall()
+            vendors = [r[0] for r in v_rows if r[0]]
+            
+        if not vendors:
+            v_rows = db.conn.execute("SELECT DISTINCT vendor_name FROM vendor_list LIMIT 5").fetchall()
+            vendors = [r[0] for r in v_rows if r[0]]
+            
+        # Find matching chart of accounts
+        if clean_q:
+            a_rows = db.conn.execute(
+                "SELECT DISTINCT account_name FROM chart_of_accounts WHERE LOWER(account_name) LIKE ? LIMIT 5",
+                [f"%{clean_q}%"]
+            ).fetchall()
+            accounts = [r[0] for r in a_rows if r[0]]
+            
+        if not accounts:
+            a_rows = db.conn.execute("SELECT DISTINCT account_name FROM chart_of_accounts LIMIT 5").fetchall()
+            accounts = [r[0] for r in a_rows if r[0]]
+            
+    except Exception as e:
+        logger.warning(f"Failed to fetch DB context for autocomplete: {e}")
+        
+    return {"vendors": vendors, "accounts": accounts}
+
+
+@app.post("/api/autocomplete", response_model=AutocompleteResponse)
+async def autocomplete(request: AutocompleteRequest):
+    """Generate sentence autocomplete suggestions grounded in financial dataset context
+    using AWS Bedrock amazon.nova-micro-v1:0"""
+    query = request.query.strip()
+    if not query or len(query) < 2:
+        return AutocompleteResponse(suggestions=[])
+
+    ctx = get_dataset_autocomplete_context(query)
+    vendor_ctx = ", ".join(ctx["vendors"]) if ctx["vendors"] else "Acme Corp, TechServices Inc"
+    account_ctx = ", ".join(ctx["accounts"]) if ctx["accounts"] else "Software Licenses, Office Supplies"
+
+    # Try Bedrock amazon.nova-micro-v1:0
+    try:
+        bedrock = get_bedrock_autocomplete_client()
+        prompt = f"""You are a sentence autocomplete engine for a financial analytics dashboard.
+Database Context:
+- Vendors: {vendor_ctx}
+- Chart of accounts: {account_ctx}
+- Common finance topics: vendor spend, unreconciled transactions, payout status, high amount transactions, flagged payments.
+
+User input so far: "{query}"
+
+Complete what the user is typing into 1 to 3 natural, full sentence user queries.
+Rules:
+1. Every suggestion MUST start with or complete: "{query}"
+2. Use vendor names or accounts from the database context when relevant.
+3. Keep sentences short and clear (5 to 15 words).
+4. Return ONLY a valid JSON array of strings containing 1-3 completion sentences, e.g. ["{query} ..."]. Do NOT include markdown codeblocks or extra prose."""
+
+        response = await asyncio.to_thread(
+            bedrock.converse,
+            modelId="amazon.nova-micro-v1:0",
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": 120, "temperature": 0.2}
+        )
+
+        output_text = response["output"]["message"]["content"][0]["text"].strip()
+        if "```" in output_text:
+            output_text = output_text.split("```")[1]
+            if output_text.startswith("json"):
+                output_text = output_text[4:]
+            output_text = output_text.strip()
+
+        parsed = json.loads(output_text)
+        if isinstance(parsed, list):
+            valid = [str(s).strip() for s in parsed if isinstance(s, str) and s.strip()]
+            if valid:
+                return AutocompleteResponse(suggestions=valid[:4])
+    except Exception as e:
+        logger.warning(f"Bedrock amazon.nova-micro-v1:0 autocomplete warning: {e}")
+
+    # Fallback template completion grounded in data
+    fallback = []
+    q_lower = query.lower()
+    sample_vendor = ctx['vendors'][0] if ctx['vendors'] else 'Acme'
+    sample_account = ctx['accounts'][0] if ctx['accounts'] else 'Software'
+    
+    templates = [
+        f"What is our total spend with vendor {sample_vendor}?",
+        f"Show unreconciled transactions in Q3",
+        f"List top 10 vendors by total payout amount",
+        f"Which vendors have unusual payment patterns?",
+        f"Show transactions for account {sample_account}",
+    ]
+    for t in templates:
+        if t.lower().startswith(q_lower) or q_lower in t.lower():
+            fallback.append(t)
+            
+    if not fallback:
+        fallback.append(f"{query} with vendor {sample_vendor}")
+
+    return AutocompleteResponse(suggestions=fallback[:4])
 
 @app.get("/schema")
 async def get_schema():

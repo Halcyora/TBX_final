@@ -1,15 +1,24 @@
 import React, { useState } from 'react';
 import { FinanceAnswer } from '../lib/types';
+import StepsList from './StepsList';
 import styles from '../styles/ResultsPanel.module.css';
 
 interface ResultsPanelProps {
   result: FinanceAnswer;
 }
 
+type TabId = 'steps' | 'grounding';
+
 export default function ResultsPanel({ result }: ResultsPanelProps) {
   const rows = result.query_results || [];
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
   const [exporting, setExporting] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>('steps');
+
+  const anomaliesById = new Map(
+    (result.anomalies_detected || []).map((a) => [String(a.transaction_id), a])
+  );
+  const idColumn = columns.find((col) => col === 'transaction_id' || col === 'payout_id');
 
   const handleExport = async () => {
     setExporting(true);
@@ -65,32 +74,60 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
           <table className={styles.table}>
             <thead>
               <tr>
+                {idColumn && <th></th>}
                 {columns.map((col) => (
                   <th key={col}>{col.replace(/_/g, ' ')}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, idx) => (
-                <tr key={idx}>
-                  {columns.map((col) => (
-                    <td key={col}>{formatCellValue(row[col])}</td>
-                  ))}
-                </tr>
-              ))}
+              {rows.map((row, idx) => {
+                const rowId = idColumn ? String(row[idColumn]) : undefined;
+                const anomaly = rowId ? anomaliesById.get(rowId) : undefined;
+                return (
+                  <tr key={idx} className={anomaly ? styles[`anomalyRow_${anomaly.severity}`] : undefined} title={anomaly?.reason}>
+                    {idColumn && <td className={styles.anomalyFlag}>{anomaly ? '🚨' : ''}</td>}
+                    {columns.map((col) => (
+                      <td key={col}>{formatCellValue(row[col])}</td>
+                    ))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
       {result.grounding_info && (
-        <details className={styles.section}>
-          <summary>📊 Grounding Info</summary>
-          <pre><code>{result.grounding_info.sql_query}</code></pre>
-          <p className={styles.groundingText}>
-            Data source: {result.grounding_info.data_source || 'Verified execution against database'}
-          </p>
-        </details>
+        <div className={styles.section}>
+          <div className={styles.tabBar}>
+            <button
+              className={`${styles.tabButton} ${activeTab === 'steps' ? styles.tabActive : ''}`}
+              onClick={() => setActiveTab('steps')}
+            >
+              🔄 Steps
+            </button>
+            <button
+              className={`${styles.tabButton} ${activeTab === 'grounding' ? styles.tabActive : ''}`}
+              onClick={() => setActiveTab('grounding')}
+            >
+              📊 Grounding Info
+            </button>
+          </div>
+
+          {activeTab === 'steps' && (
+            <StepsList stages={result.processing_stages || []} details={result.stage_details} />
+          )}
+
+          {activeTab === 'grounding' && (
+            <>
+              <pre><code>{result.grounding_info.sql_query}</code></pre>
+              <p className={styles.groundingText}>
+                Data source: {result.grounding_info.data_source || 'Verified execution against database'}
+              </p>
+            </>
+          )}
+        </div>
       )}
 
       {result.anomalies_detected && result.anomalies_detected.length > 0 && (

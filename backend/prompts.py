@@ -1,133 +1,147 @@
 """
-LLM Prompts for Finance Assistant
+LLM Prompts for TBX Finance Assistant
 Includes few-shot examples, system prompts, and response formatting
+TBX Schema: bank, account, transaction
 """
 
 # ============================================================================
 # SYSTEM PROMPT FOR SQL GENERATION
 # ============================================================================
-SQL_GENERATION_SYSTEM_PROMPT = """You are an expert SQL developer for financial data analysis.
+SQL_GENERATION_SYSTEM_PROMPT = """You are an expert SQL developer for TBX financial data analysis.
 Your job is to convert natural language questions into precise SQL queries.
 
-DATABASE SCHEMA:
-- transactions: transaction_id, vendor_id, transaction_date, transaction_type, amount, currency, account_id, account_name, description, status, invoice_number, reference_number, notes
-  Example row: TXN0000001, V00439, 2024-12-19, Payment, 700.42, USD, 1013, Service Revenue, "Transaction for V00439", Rejected, INV725850, REF52421, (null)
-  transaction_type values: Payment, Invoice, Expense, Refund, Credit Memo
-  status values: Pending, Completed, Rejected, Hold
-- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status, reference_number
-  Example row: PO0000001, V00342, 2025-07-23, 485.87, USD, Wire Transfer, Cancelled, CHECK545461
-  status values: Pending, Completed, Cancelled
-- reconciliation_status: transaction_id, reconciliation_status, matched_payout_id, reconciliation_date, last_reviewed, notes
-  Example row: TXN0000001, Reconciled, PO0000128, 2024-03-24, (null), (null)
-  reconciliation_status values: Reconciled, Unreconciled, Partially Reconciled, Pending Reconciliation
-- chart_of_accounts: account_id, account_name, account_type, category
-  Example row: 1000, Cash, Assets, Assets
-  category/account_type values: Assets, Liabilities, Equity, Revenue, Expenses
-  NOTE: this table has NO balance/amount column - only COUNT/LIST rows by category, do not SUM or reference a balance column
-- vendor_list: vendor_id, vendor_name, industry, country, status
-  Example row: V00001, Pro Tech 509, Retail, Canada, Active
-  status values: Active, Inactive, On Hold
+DATABASE SCHEMA (TBX Finance Assistant):
+
+bank:
+- bank_code (VARCHAR, PRIMARY KEY): Bank identifier code (e.g., HDFC, ICIC, SBIN, UTIB)
+- bank_name (VARCHAR): Canonical bank name in all-caps (e.g., HDFC BANK LIMITED)
+
+account:
+- account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
+- entity_id (VARCHAR): Customer/entity that owns this account (UUID)
+- account_number (VARCHAR): Account number (SENSITIVE - mask in output)
+- program_id (VARCHAR): Program/product ID (0, 4, 21, 46, 99)
+- available_balance (VARCHAR): Account balance (can be negative, zero, or extreme values)
+- bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
+
+transaction:
+- transaction_id (VARCHAR, PRIMARY KEY): Unique transaction identifier (UUID)
+- account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
+- transaction_date (VARCHAR): Transaction timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these two values)
+- description (VARCHAR): Transaction description (can contain special chars, quotes, slashes)
+- transaction_amount (VARCHAR): Amount (can be 0.00, micro amounts, or extreme values)
+- transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
+- utr_number (VARCHAR): Unique Transaction Reference (often empty, encrypted, or plaintext)
 
 IMPORTANT RULES:
-1. Always use DATE FILTERS when user mentions time periods (last month, Q3, year-to-date, etc.)
-2. JOIN tables only when necessary - keep queries simple
-3. Use SUM(), COUNT(), AVG() for aggregations
-4. Filter by reconciliation_status when asking about unreconciled/reconciled transactions
-5. Return meaningful column names using AS aliases
-6. Date format in database: YYYY-MM-DD
-7. When user says "last month", assume current month is December 2025, so "last month" = November 2025
-8. Always think step-by-step before writing SQL
+1. Add a DATE FILTER only when the user's question explicitly mentions a time period (last month, Q3, 2026, etc).
+   If no time period is mentioned, return results across ALL dates in the dataset.
+2. JOIN tables only when necessary:
+   - To get bank names: JOIN bank ON account.bank_code = bank.bank_code
+   - To get account details: JOIN account ON transaction.account_id = account.account_id
+   - Never JOIN unnecessarily - keep queries simple.
+3. Use SUM(), COUNT(), AVG(), MIN(), MAX() for aggregations.
+4. Filter transaction_type ONLY using exact values: 'credit' or 'debit'
+5. Handle NULL/empty fields gracefully (transaction_reference_id and utr_number are often empty)
+6. When filtering by reference number or UTR, remember they can be NULL/empty strings ('')
+7. Return meaningful column names using AS aliases
+8. IMPORTANT: Cast numeric columns when needed: CAST(available_balance AS DECIMAL), CAST(transaction_amount AS DECIMAL)
+9. Always think step-by-step before writing SQL.
 
 OUTPUT FORMAT:
 Return ONLY the SQL query, nothing else. No markdown, no explanation."""
 
 # ============================================================================
-# FEW-SHOT EXAMPLES FOR SQL GENERATION
+# FEW-SHOT EXAMPLES FOR SQL GENERATION (TBX Schema)
 # ============================================================================
 SQL_EXAMPLES = [
     {
-        "question": "How much did we spend on vendor V00100 last month?",
-        "reasoning": "Need to: 1) Filter by vendor V00100, 2) Filter by last month (November 2025), 3) Sum the amounts",
+        "question": "What is the total amount of transactions from HDFC Bank?",
+        "reasoning": "Need to: 1) JOIN account with bank to get bank names, 2) Filter by HDFC, 3) Sum transaction amounts",
         "sql": """SELECT 
-    vendor_id,
-    SUM(amount) as total_spent,
-    COUNT(*) as transaction_count,
-    DATE_TRUNC('month', transaction_date) as month
-FROM transactions
-WHERE vendor_id = 'V00100'
-    AND transaction_date >= '2025-11-01' 
-    AND transaction_date < '2025-12-01'
-GROUP BY vendor_id, DATE_TRUNC('month', transaction_date)"""
+    b.bank_code,
+    b.bank_name,
+    COUNT(t.transaction_id) as transaction_count,
+    SUM(CAST(t.transaction_amount AS DECIMAL)) as total_amount
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+JOIN transaction t ON a.account_id = t.account_id
+WHERE b.bank_code = 'HDFC'
+GROUP BY b.bank_code, b.bank_name"""
     },
     {
-        "question": "Which transactions are still unreconciled?",
-        "reasoning": "Need to: 1) Join transactions with reconciliation_status, 2) Filter where status is 'Unreconciled' or 'Pending Reconciliation' (not yet fully reconciled), 3) Return transaction details",
+        "question": "Show me accounts with negative balances",
+        "reasoning": "Need to: 1) Filter accounts where available_balance < 0, 2) Get bank name, 3) Show account details",
+        "sql": """SELECT 
+    a.account_id,
+    a.account_number,
+    a.program_id,
+    CAST(a.available_balance AS DECIMAL) as balance,
+    b.bank_name
+FROM account a
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE CAST(a.available_balance AS DECIMAL) < 0
+ORDER BY CAST(a.available_balance AS DECIMAL) ASC"""
+    },
+    {
+        "question": "How many credit vs debit transactions are there?",
+        "reasoning": "Need to: 1) Group by transaction_type, 2) Count transactions, 3) Sum amounts for each type",
+        "sql": """SELECT 
+    t.transaction_type,
+    COUNT(t.transaction_id) as transaction_count,
+    SUM(CAST(t.transaction_amount AS DECIMAL)) as total_amount,
+    AVG(CAST(t.transaction_amount AS DECIMAL)) as avg_amount
+FROM transaction t
+GROUP BY t.transaction_type"""
+    },
+    {
+        "question": "Which accounts have zero available balance?",
+        "reasoning": "Need to: 1) Filter accounts where available_balance = '0.00', 2) Get associated transactions, 3) Show account details",
+        "sql": """SELECT 
+    a.account_id,
+    a.account_number,
+    a.program_id,
+    COUNT(t.transaction_id) as transaction_count,
+    b.bank_name
+FROM account a
+LEFT JOIN transaction t ON a.account_id = t.account_id
+JOIN bank b ON a.bank_code = b.bank_code
+WHERE a.available_balance = '0.00'
+GROUP BY a.account_id, a.account_number, a.program_id, b.bank_name"""
+    },
+    {
+        "question": "Show transactions with missing UTR or reference ID",
+        "reasoning": "Need to: 1) Filter transactions where utr_number is empty OR transaction_reference_id is empty, 2) Get account/bank info, 3) Count how many",
         "sql": """SELECT 
     t.transaction_id,
-    t.vendor_id,
+    t.account_id,
     t.transaction_date,
-    t.amount,
-    r.reconciliation_status,
-    r.notes
-FROM transactions t
-LEFT JOIN reconciliation_status r ON t.transaction_id = r.transaction_id
-WHERE r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation')
-ORDER BY t.transaction_date DESC
-LIMIT 100"""
-    },
-    {
-        "question": "Show spending by vendor for Q3 2024",
-        "reasoning": "Need to: 1) Filter Q3 2024 (July-Sept), 2) Group by vendor, 3) Sum amounts, 4) Join with vendor names",
-        "sql": """SELECT 
-    v.vendor_name,
-    t.vendor_id,
-    SUM(t.amount) as total_spent,
-    COUNT(*) as transaction_count,
-    AVG(t.amount) as avg_transaction
-FROM transactions t
-JOIN vendor_list v ON t.vendor_id = v.vendor_id
-WHERE transaction_date >= '2024-07-01' 
-    AND transaction_date < '2024-10-01'
-GROUP BY t.vendor_id, v.vendor_name
-ORDER BY total_spent DESC"""
-    },
-    {
-        "question": "What are our highest-value payouts?",
-        "reasoning": "Need to: 1) Get payout amounts, 2) Sort descending, 3) Limit to top results, 4) Include vendor name",
-        "sql": """SELECT 
-    p.payout_id,
-    v.vendor_name,
-    p.amount,
-    p.payout_date,
-    p.payment_method,
-    p.status
-FROM vendor_payouts p
-JOIN vendor_list v ON p.vendor_id = v.vendor_id
-ORDER BY p.amount DESC
+    t.transaction_type,
+    CAST(t.transaction_amount AS DECIMAL) as amount,
+    t.description,
+    CASE WHEN t.utr_number = '' THEN 'Missing UTR' ELSE 'Has UTR' END as utr_status,
+    CASE WHEN t.transaction_reference_id = '' THEN 'Missing Ref' ELSE 'Has Ref' END as ref_status
+FROM transaction t
+WHERE t.utr_number = '' OR t.transaction_reference_id = ''
 LIMIT 20"""
     },
     {
-        "question": "How much is outstanding from vendor ABC?",
-        "reasoning": "Need to: 1) Find vendor by name, 2) Get unreconciled transactions for that vendor, 3) Sum amounts",
+        "question": "What is the average transaction amount by account?",
+        "reasoning": "Need to: 1) Group by account, 2) Calculate average amount, 3) Join to get bank/account details, 4) Order by average",
         "sql": """SELECT 
-    t.vendor_id,
-    v.vendor_name,
-    SUM(t.amount) as outstanding_amount,
-    COUNT(*) as transaction_count
-FROM transactions t
-JOIN vendor_list v ON t.vendor_id = v.vendor_id
-LEFT JOIN reconciliation_status r ON t.transaction_id = r.transaction_id
-WHERE LOWER(v.vendor_name) LIKE LOWER('%ABC%')
-    AND (r.reconciliation_status IN ('Unreconciled', 'Pending Reconciliation') OR r.reconciliation_status IS NULL)
-GROUP BY t.vendor_id, v.vendor_name"""
-    },
-    {
-        "question": "How many equity accounts are there in the chart of accounts?",
-        "reasoning": "Need to: 1) Filter chart_of_accounts by category = 'Equity', 2) Count rows (no amounts to sum, this table has no balance column)",
-        "sql": """SELECT 
-    COUNT(*) as equity_account_count
-FROM chart_of_accounts
-WHERE category = 'Equity'"""
+    a.account_id,
+    a.account_number,
+    b.bank_name,
+    COUNT(t.transaction_id) as transaction_count,
+    AVG(CAST(t.transaction_amount AS DECIMAL)) as avg_amount,
+    MIN(CAST(t.transaction_amount AS DECIMAL)) as min_amount,
+    MAX(CAST(t.transaction_amount AS DECIMAL)) as max_amount
+FROM account a
+LEFT JOIN transaction t ON a.account_id = t.account_id
+JOIN bank b ON a.bank_code = b.bank_code
+GROUP BY a.account_id, a.account_number, b.bank_name
+ORDER BY avg_amount DESC"""
     }
 ]
 
@@ -138,7 +152,7 @@ COT_PROMPT_TEMPLATE = """Question: {question}
 
 Think step-by-step:
 1. What data do we need? (Which tables?)
-2. What filters apply? (vendor, date range, status?)
+2. What filters apply? (vendor, status - only add a date range if a time period is explicitly mentioned)
 3. What calculations? (SUM, COUNT, AVG?)
 4. How to join tables? (if needed)
 5. What order/limit? (sorting, top results?)
@@ -148,28 +162,42 @@ Now write the SQL query based on this reasoning:"""
 # ============================================================================
 # CLASSIFICATION PROMPT (Determine query type and confidence)
 # ============================================================================
-CLASSIFICATION_PROMPT = """{history_context}DATABASE SCHEMA (for reference only, do not write SQL here):
-- transactions: transaction_id, vendor_id, transaction_date, transaction_type (Payment/Invoice/Expense/Refund/Credit Memo), amount, currency, account_id, account_name, description, status (Pending/Completed/Rejected/Hold), invoice_number, reference_number, notes
-- vendor_payouts: payout_id, vendor_id, payout_date, amount, currency, payment_method, status (Pending/Completed/Cancelled), reference_number
-- reconciliation_status: transaction_id, reconciliation_status (Reconciled/Unreconciled/Partially Reconciled/Pending Reconciliation), matched_payout_id, reconciliation_date, last_reviewed, notes
-- chart_of_accounts: account_id, account_name, account_type/category (Assets/Liabilities/Equity/Revenue/Expenses)
-- vendor_list: vendor_id, vendor_name, industry, country, status (Active/Inactive/On Hold)
+CLASSIFICATION_PROMPT = """{history_context}DATABASE SCHEMA (TBX Finance Assistant - for reference only, do not write SQL here):
+
+bank:
+- bank_code (VARCHAR, PRIMARY KEY): Bank code (e.g., HDFC, ICIC, SBIN, UTIB)
+- bank_name (VARCHAR): Full bank name
+
+account:
+- account_id (VARCHAR, PRIMARY KEY): Unique account ID (UUID)
+- entity_id (VARCHAR): Entity/customer ID (UUID)
+- account_number (VARCHAR): Account number (SENSITIVE - do not expose)
+- program_id (VARCHAR): Program ID (0, 4, 21, 46, 99)
+- available_balance (VARCHAR): Current balance (can be negative/zero/extreme)
+- bank_code (VARCHAR, FOREIGN KEY): Reference to bank.bank_code
+
+transaction:
+- transaction_id (VARCHAR, PRIMARY KEY): Unique transaction ID (UUID)
+- account_id (VARCHAR, FOREIGN KEY): Reference to account.account_id
+- transaction_date (VARCHAR): Transaction timestamp (YYYY-MM-DD HH:MM:SS.microseconds)
+- transaction_type (VARCHAR): 'credit' or 'debit' (ONLY these values)
+- description (VARCHAR): Transaction description
+- transaction_amount (VARCHAR): Amount (can be 0.00, extreme values, etc.)
+- transaction_reference_id (VARCHAR): Reference/receipt number (often empty, can be duplicated)
+- utr_number (VARCHAR): UTR (often empty, encrypted, or plaintext)
 
 Analyze this question about financial data:
 "{question}"
 
 Extract:
-1. intent: What type of query? (vendor_spend, reconciliation_status, payouts, chart_of_accounts, comparisons, other)
-2. entities: Which vendors/accounts/categories/time periods mentioned?
-3. filters: What conditions? (date range, status, vendor, account_type/category, amount, etc.)
+1. intent: What type of query? (account_balances, transaction_analysis, bank_summary, specific_account, transaction_search, other)
+2. entities: Which accounts/banks/programs/amounts mentioned?
+3. filters: What conditions? (date range, bank_code, account_id, transaction_type, balance range, missing_fields, etc.)
 4. confidence: How clear is the question? (high/medium/low)
 5. clarification_needed: What additional info would help? (if any)
 
-If the question can be answered directly from the schema above (e.g. counting/listing accounts by
-category such as "Equity"), it does NOT need a vendor or date range - set confidence high.
-
-If the previous conversation above answers or narrows this question (e.g. "what about last month"
-following an earlier vendor question), use it to resolve entities/filters and raise confidence.
+The dataset spans multiple years (2023-2026). If a date is ambiguous, ask for clarification.
+If the question can be answered directly (e.g., "show negative balance accounts"), confidence is high.
 
 Respond in JSON format:
 {{

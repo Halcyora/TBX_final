@@ -6,6 +6,7 @@ State machine for query processing pipeline
 import json
 import os
 import logging
+import asyncio
 import urllib.request
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -165,6 +166,7 @@ class FinanceAssistantState(BaseModel):
     # Meta
     model_used: str = "qwen2.5-coder-1.5b"
     processing_stages_completed: List[str] = []
+    stage_details: Dict[str, str] = {}
     
     class Config:
         arbitrary_types_allowed = True
@@ -184,8 +186,8 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         history_context = ContextManager.format_history_for_prompt(state.conversation_history)
         prompt = build_classification_prompt(state.user_query, history_context)
 
-        response_text = call_llm(
-            prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+        response_text = await asyncio.to_thread(
+            call_llm, prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
         )
         
         # Try to extract JSON
@@ -216,6 +218,9 @@ async def classify_query_node(state: FinanceAssistantState) -> FinanceAssistantS
         state.needs_clarification = state.confidence_score < 0.6
         
         state.processing_stages_completed.append("classification")
+        state.stage_details["classification"] = (
+            f"Intent: {state.intent} · confidence {state.confidence_score:.0%}"
+        )
         logger.info(f"Classification complete: intent={state.intent}, confidence={state.confidence_score:.2f}")
         
     except Exception as e:
@@ -250,6 +255,7 @@ async def clarification_node(state: FinanceAssistantState) -> FinanceAssistantSt
     }
     
     state.processing_stages_completed.append("clarification_requested")
+    state.stage_details["clarification_requested"] = f"Asked {len(questions)} clarifying question(s)"
     return state
 
 
@@ -270,15 +276,17 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         cot_prompt = build_cot_prompt(state.user_query, history_context)
         
         # Get chain-of-thought reasoning
-        cot_text = call_llm(cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2)
+        cot_text = await asyncio.to_thread(
+            call_llm, cot_prompt, model_alias=state.model_used, max_tokens=500, temperature=0.2
+        )
         logger.debug(f"Chain-of-thought: {cot_text[:200]}")
         
         # Now generate SQL with few-shot examples
         few_shot_prompt = build_few_shot_prompt(state.user_query, history_context)
         
-        sql_text = call_llm(
-            few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
-        ).strip()
+        sql_text = (await asyncio.to_thread(
+            call_llm, few_shot_prompt, model_alias=state.model_used, max_tokens=1024, temperature=0.1
+        )).strip()
         
         # Clean up SQL (remove markdown formatting if present)
         if "```sql" in sql_text:
@@ -288,6 +296,8 @@ async def sql_generation_node(state: FinanceAssistantState) -> FinanceAssistantS
         
         state.sql_query = sql_text
         state.processing_stages_completed.append("sql_generation")
+        first_line = sql_text.strip().splitlines()[0] if sql_text.strip() else ""
+        state.stage_details["sql_generation"] = f"{first_line[:80]}..." if len(sql_text) > 80 else first_line
         logger.info(f"SQL generated: {sql_text[:100]}...")
         
     except Exception as e:
@@ -317,10 +327,10 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
         else:
             # LLM-based semantic validation - the LLM may rewrite the query, so it must be
             # re-checked with the same static safety net before being trusted for execution
-            corrected_sql = call_llm(
-                SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
+            corrected_sql = (await asyncio.to_thread(
+                call_llm, SQL_VALIDATION_PROMPT.format(sql=state.sql_query),
                 model_alias=state.model_used, max_tokens=1024, temperature=0.0
-            ).strip()
+            )).strip()
             
             if "```sql" in corrected_sql:
                 corrected_sql = corrected_sql.split("```sql")[1].split("```")[0].strip()
@@ -332,6 +342,7 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
                 state.sql_query = corrected_sql
                 state.sql_valid = True
                 state.processing_stages_completed.append("sql_validation")
+                state.stage_details["sql_validation"] = "Passed static + LLM semantic checks (query refined)"
                 logger.info("SQL validation passed (LLM-corrected query re-verified)")
             else:
                 # LLM's "correction" failed the safety net - keep the original query,
@@ -342,6 +353,7 @@ async def sql_validation_node(state: FinanceAssistantState) -> FinanceAssistantS
                 )
                 state.sql_valid = True
                 state.processing_stages_completed.append("sql_validation")
+                state.stage_details["sql_validation"] = "Passed static checks (kept original query)"
         
     except Exception as e:
         logger.error(f"SQL validation error: {e}")
@@ -366,6 +378,7 @@ async def query_execution_node(state: FinanceAssistantState) -> FinanceAssistant
         if success:
             state.query_results = result if isinstance(result, list) else [result]
             state.processing_stages_completed.append("query_execution")
+            state.stage_details["query_execution"] = f"{len(state.query_results)} row(s) returned"
             logger.info(f"Query execution successful, {len(state.query_results)} rows returned")
         else:
             state.execution_error = str(result)
@@ -391,7 +404,19 @@ async def anomaly_detection_node(state: FinanceAssistantState) -> FinanceAssista
         detector = AnomalyDetector()
         anomaly_result = detector.detect_anomalies(state.query_results)
         
-        state.anomalies = anomaly_result.get("anomalies", [])
+        # Flatten each anomaly's nested "row" into the top-level id/amount fields the
+        # frontend (and CSV/response) expects, instead of an opaque nested dict.
+        raw_anomalies = anomaly_result.get("anomalies", [])
+        state.anomalies = [
+            {
+                "transaction_id": a["row"].get("transaction_id") or a["row"].get("payout_id") or "unknown",
+                "vendor_id": a["row"].get("vendor_id"),
+                "amount": a["row"].get("amount"),
+                "reason": a["reason"],
+                "severity": a["severity"],
+            }
+            for a in raw_anomalies
+        ]
         
         if state.anomalies:
             anomaly_count = len(state.anomalies)
@@ -407,6 +432,9 @@ async def anomaly_detection_node(state: FinanceAssistantState) -> FinanceAssista
             logger.info(state.anomaly_summary)
         
         state.processing_stages_completed.append("anomaly_detection")
+        state.stage_details["anomaly_detection"] = (
+            state.anomaly_summary if state.anomalies else "No anomalies detected"
+        )
         
     except Exception as e:
         logger.error(f"Anomaly detection error: {e}")
@@ -490,6 +518,9 @@ async def response_formatting_node(state: FinanceAssistantState) -> FinanceAssis
         }
         
         state.processing_stages_completed.append("response_formatting")
+        state.stage_details["response_formatting"] = (
+            f"Composite confidence {composite_confidence:.0%}"
+        )
         logger.info("Response formatted successfully")
         
     except Exception as e:
@@ -509,14 +540,16 @@ async def export_node(state: FinanceAssistantState) -> FinanceAssistantState:
     logger.info("Generating export")
     
     try:
+        os.makedirs("exports", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"export_{timestamp}.csv"
+        filename = os.path.join("exports", f"export_{timestamp}.csv")
         
         success, result = DataExporter.to_csv(state.query_results, filename)
         
         if success:
             state.export_filename = result
             state.processing_stages_completed.append("export")
+            state.stage_details["export"] = f"Saved as {result}"
             logger.info(f"Export successful: {filename}")
         else:
             logger.warning(f"Export failed: {result}")

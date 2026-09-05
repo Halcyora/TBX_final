@@ -87,8 +87,89 @@
   font-variant-numeric: tabular-nums;
 }
 
+.anomalyFlag {
+  text-align: center;
+  width: 1.5rem;
+  padding-left: 0.4rem !important;
+  padding-right: 0.2rem !important;
+}
+
+.anomalyRow_high {
+  background: #ffebee;
+}
+
+.anomalyRow_high:hover {
+  background: #ffdde0;
+}
+
+.anomalyRow_medium {
+  background: #fff3e0;
+}
+
+.anomalyRow_medium:hover {
+  background: #ffeacc;
+}
+
 .section {
   margin: 0.5rem 0 0 0;
+}
+
+.tabBar {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.tabButton {
+  border: none;
+  background: #f5f5f5;
+  color: #555;
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.tabButton:hover {
+  background: #ececf1;
+}
+
+.tabActive {
+  background: #667eea;
+  color: #fff;
+}
+
+.stepsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stepItem {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.82rem;
+  color: #333;
+  border-left: 2px solid #d4edda;
+  margin-bottom: 0.15rem;
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stepDetail {
+  margin: 0.15rem 0 0 1.25rem;
+  font-size: 0.76rem;
+  color: #777;
+}
+
+.stepCheck {
+  color: #155724;
+  font-weight: 700;
 }
 
 .section summary {
