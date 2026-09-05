@@ -35,7 +35,10 @@ Bank of India / "SBI" is code SBIN, not "SBI"; Axis Bank is code UTIB, not "AXIS
 - RATN -> RBL BANK LIMITED (user may say "RBL")
 When the user names a bank, look it up in this mapping and filter using the matching bank_code
 (preferred, exact match) or `UPPER(b.bank_name) LIKE UPPER('%<key part of name>%')` if unsure.
-Never filter using a bank_code you invented that isn't in this list.
+Never filter using a bank_code you invented that isn't in this list. This mapping is REFERENCE ONLY -
+when the question names exactly ONE bank, filter with a single `bank_code = '<code>'`. NEVER paste
+the whole mapping into a `bank_code IN (...)` list - only include multiple codes if the user's
+question explicitly names multiple banks or asks for "all banks".
 
 account table:
 - account_id (VARCHAR, PRIMARY KEY): Unique account identifier (UUID)
@@ -94,7 +97,12 @@ IMPORTANT RULES:
     account_number filter that wasn't mentioned. If the question says "sum"/"total", the query MUST
     use SUM(), not a bare column selection.
 14. NULL-SAFE AGGREGATES: Always wrap SUM()/AVG() in COALESCE(..., 0) - e.g. COALESCE(SUM(CAST(x AS
-    DECIMAL)), 0) - so a filter that matches zero rows returns 0 instead of NULL/blank.
+    DECIMAL)), 0) - so a filter that matches zero rows returns 0 instead of NULL/blank. available_balance
+    and transaction_amount are VARCHAR columns - always CAST them to DECIMAL BEFORE using them in
+    SUM/COALESCE/CASE/arithmetic. NEVER write COALESCE(available_balance, 0) or
+    CASE WHEN available_balance IS NOT NULL THEN available_balance ELSE 0 END directly - that mixes
+    VARCHAR with an integer literal and fails. Always CAST first: COALESCE(CAST(available_balance AS
+    DECIMAL), 0).
 15. "SUM"/"TOTAL" ONLY APPLIES TO NUMERIC COLUMNS (available_balance, transaction_amount). If the
     user asks for "sum of accounts", "sum of transactions", "total accounts", etc. (counting rows/
     entities, not a money amount), this means COUNT(*), NOT SUM(). Only use SUM() on the actual
@@ -357,8 +365,11 @@ Check:
 5. Performance: Reasonable query structure?
 6. Bank codes: Only these bank_code values exist: HDFC, ICIC, SBIN, UTIB, KKBK, CNRB, UBIN, AUBL,
    TMBL, RATN. Reject/fix any other bank_code literal (e.g. 'SBI' should be 'SBIN', 'AXIS' should be
-   'UTIB').
-7. Aggregates: SUM()/AVG() should be wrapped in COALESCE(..., 0) so zero matching rows return 0, not NULL.
+   'UTIB'). If only one bank is named in the question, the query should filter on ONE bank_code, not
+   an IN (...) list of every code.
+7. Aggregates: SUM()/AVG() should be wrapped in COALESCE(..., 0) so zero matching rows return 0, not
+   NULL. available_balance/transaction_amount are VARCHAR - they must be CAST to DECIMAL BEFORE being
+   used in COALESCE/CASE/arithmetic (e.g. COALESCE(CAST(x AS DECIMAL), 0), never COALESCE(x, 0)).
 
 If there are issues (especially pluralized table names), fix them and return corrected SQL.
 If query is correct, return it as-is.
@@ -377,8 +388,10 @@ Database error:
 
 Fix the query so it executes successfully against the same schema (tables: bank, account,
 transaction - all singular) while still answering the original question. Common causes:
-non-aggregated columns missing from GROUP BY, wrong table alias for a column, or a
-plural table name.
+non-aggregated columns missing from GROUP BY, wrong table alias for a column, a plural table name,
+or mixing a VARCHAR column (available_balance, transaction_amount) with a number without CAST(...
+AS DECIMAL) first (e.g. COALESCE(available_balance, 0) is invalid - use
+COALESCE(CAST(available_balance AS DECIMAL), 0) instead).
 
 Return ONLY the corrected SQL query, nothing else. No markdown, no explanation."""
 
