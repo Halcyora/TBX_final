@@ -115,6 +115,17 @@ export default function ResultsPanel({ result }: ResultsPanelProps) {
               <p className={styles.groundingText}>
                 Data source: {result.grounding_info.data_source || 'Verified execution against database'}
               </p>
+              {typeof result.grounding_info.rows_analyzed === 'number' && (
+                <p className={styles.groundingText}>
+                  Rows analyzed: {result.grounding_info.rows_analyzed.toLocaleString()}
+                </p>
+              )}
+              {result.grounding_info.filters_applied &&
+                Object.keys(result.grounding_info.filters_applied).length > 0 && (
+                  <p className={styles.groundingText}>
+                    Filters applied: {JSON.stringify(result.grounding_info.filters_applied)}
+                  </p>
+                )}
             </>
           )}
         </div>

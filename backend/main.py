@@ -152,18 +152,30 @@ class SessionManager:
     
     def add_turn(self, session_id: str, question: str, answer: str,
                 export_filename: Optional[str] = None, processing_stages: Optional[List[str]] = None,
-                stage_details: Optional[Dict[str, str]] = None):
-        """Store one Q&A turn (question+answer together) rather than two separate messages"""
+                stage_details: Optional[Dict[str, str]] = None, confidence_score: float = 0.0,
+                confidence_band: str = "low", grounding_info: Optional[Dict[str, Any]] = None,
+                anomalies_detected: Optional[List[Dict[str, Any]]] = None,
+                query_results: Optional[List[Dict[str, Any]]] = None, export_available: bool = False):
+        """Store one Q&A turn (question+answer together) rather than two separate messages.
+        Persists the FULL response payload, not just text, so a page reload or session switch
+        can rehydrate the whole results panel (confidence, grounding, anomalies, table) -
+        not just the chat bubble."""
         session = self.get_session(session_id)
         if not session:
             raise ValueError(f"Session not found: {session_id}")
-        
+
         session["messages"].append({
             "question": question,
             "answer": answer,
             "export_filename": export_filename,
             "processing_stages": processing_stages or [],
             "stage_details": stage_details or {},
+            "confidence_score": confidence_score,
+            "confidence_band": confidence_band,
+            "grounding_info": grounding_info or {},
+            "anomalies_detected": anomalies_detected or [],
+            "query_results": query_results or [],
+            "export_available": export_available,
             "timestamp": datetime.now().isoformat()
         })
         
@@ -213,6 +225,14 @@ class SessionManager:
         
         summaries.sort(key=lambda s: s["last_message_at"], reverse=True)
         return summaries
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session permanently. Returns True if it existed."""
+        if session_id not in self._sessions:
+            return False
+        del self._sessions[session_id]
+        self._persist()
+        return True
 
 # ============================================================================
 # FASTAPI APP
@@ -333,15 +353,50 @@ async def get_session_messages(session_id: str):
                 "role": "assistant",
                 "content": turn["answer"],
                 "processing_stages": turn.get("processing_stages", []),
-                "stage_details": turn.get("stage_details", {})
+                "stage_details": turn.get("stage_details", {}),
+                # Full payload so a reload/session-switch rehydrates the whole results panel
+                # (confidence, grounding, anomalies, table), not just the chat bubble text.
+                "result": {
+                    "session_id": session_id,
+                    "message": turn["answer"],
+                    "confidence_score": turn.get("confidence_score", 0.0),
+                    "confidence_band": turn.get("confidence_band", "low"),
+                    "grounding_info": turn.get("grounding_info", {}),
+                    "anomalies_detected": turn.get("anomalies_detected", []),
+                    "query_results": turn.get("query_results", []),
+                    "processing_stages": turn.get("processing_stages", []),
+                    "stage_details": turn.get("stage_details", {}),
+                    "export_available": turn.get("export_available", False),
+                    "export_filename": turn.get("export_filename"),
+                }
             })
-        
+
         return chat_messages
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get session messages: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a chat session permanently"""
+    try:
+        if not session_manager:
+            raise HTTPException(status_code=500, detail="Session service unavailable")
+
+        deleted = session_manager.delete_session(session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        logger.info(f"Session deleted: {session_id}")
+        return {"message": "Session deleted successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat", response_model=ChatResponse)
@@ -389,16 +444,6 @@ async def chat(request: ChatRequest):
                 final_answer=f"Error processing query: {str(e)}"
             )
         
-        # Save turn to session (question + answer stored together, so summarization works)
-        session_manager.add_turn(
-            request.session_id,
-            request.message.content,
-            response_state.final_answer,
-            response_state.export_filename,
-            response_state.processing_stages_completed,
-            response_state.stage_details,
-        )
-        
         # Confidence: use the composite value already computed in response_formatting_node
         # (avoids recomputing with a different, drift-prone formula here)
         confidence = response_state.composite_confidence or response_state.confidence_score
@@ -408,7 +453,27 @@ async def chat(request: ChatRequest):
             confidence_band = "medium"
         else:
             confidence_band = "low"
-        
+
+        export_available = len(response_state.query_results) > 0
+
+        # Save turn to session - the FULL response payload, not just text, so a page reload or
+        # session switch can rehydrate the whole results panel (confidence, grounding,
+        # anomalies, table), not just the chat bubble.
+        session_manager.add_turn(
+            request.session_id,
+            request.message.content,
+            response_state.final_answer,
+            response_state.export_filename,
+            response_state.processing_stages_completed,
+            response_state.stage_details,
+            confidence_score=confidence,
+            confidence_band=confidence_band,
+            grounding_info=response_state.grounding_info,
+            anomalies_detected=response_state.anomalies,
+            query_results=response_state.query_results,
+            export_available=export_available,
+        )
+
         return ChatResponse(
             session_id=request.session_id,
             message=response_state.final_answer,
@@ -419,7 +484,7 @@ async def chat(request: ChatRequest):
             query_results=response_state.query_results,
             processing_stages=response_state.processing_stages_completed,
             stage_details=response_state.stage_details,
-            export_available=len(response_state.query_results) > 0,
+            export_available=export_available,
             export_filename=response_state.export_filename
         )
     

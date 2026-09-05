@@ -50,6 +50,30 @@ export default function Home() {
     }
   }, []);
 
+  const deleteSession = useCallback(async (targetSessionId: string) => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/sessions/${targetSessionId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to delete session');
+
+      const remaining = sessions.filter((s) => s.session_id !== targetSessionId);
+      setSessions(remaining);
+
+      // If the active session was deleted, switch to another existing one or start fresh
+      if (targetSessionId === sessionId) {
+        if (remaining.length > 0) {
+          await switchToSession(remaining[0].session_id);
+        } else {
+          await createNewSession();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      alert('Failed to delete conversation. Please try again.');
+    }
+  }, [sessions, sessionId, switchToSession, createNewSession]);
+
   useEffect(() => {
     // Guard against React StrictMode's dev-only double effect invocation,
     // which would otherwise race two concurrent session creations
@@ -139,6 +163,7 @@ export default function Home() {
         activeSessionId={sessionId}
         onSelectSession={switchToSession}
         onNewChat={createNewSession}
+        onDeleteSession={deleteSession}
         disabled={loading}
       />
       <div className={styles.container}>

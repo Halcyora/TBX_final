@@ -60,14 +60,42 @@
   cursor: pointer;
   text-align: left;
   width: 100%;
+  min-width: 0;
 }
 
-.sessionItem:hover {
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  border-radius: 8px;
+}
+
+.sessionRow:hover {
   background: #ececf1;
 }
 
-.sessionItem.active {
+.sessionRow.active {
   background: #e2e2ea;
+}
+
+.sessionRow:hover .deleteBtn {
+  opacity: 1;
+}
+
+.deleteBtn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.deleteBtn:hover {
+  background: #dcdce4;
 }
 
 .sessionPreview {
